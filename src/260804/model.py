@@ -82,6 +82,25 @@ class CrossAttentionFusion(nn.Module):
         fused_feat = fused.permute(0, 2, 1).view(B, C, H, W)
         return fused_feat
 
+class PoseHead(nn.Module):
+    def __init__(self, feature_dim=512, num_joints=17):
+        super().__init__()
+        self.num_joints = num_joints
+        self.head = nn.Sequential(
+            nn.AdaptiveAvgPool2d((1, 1)),
+            nn.Flatten(),
+            nn.Linear(feature_dim, 1024),
+            nn.ReLU(),
+            nn.Dropout(0.2),
+            nn.Linear(1024, num_joints * 2) # 2D 座標 (X, Y)
+        )
+
+    def forward(self, x):
+        # x: (B, feature_dim, H, W)
+        pose_flat = self.head(x) # (B, J*2)
+        pose_2d = pose_flat.view(x.size(0), self.num_joints, 2)
+        return pose_2d, None # 為了與 node.py 相容，第二個回傳值留空
+
 class Who2comPoseNet(nn.Module):
     def __init__(self, num_views=4, num_joints=17, feature_dim=512):
         super().__init__()
@@ -91,14 +110,7 @@ class Who2comPoseNet(nn.Module):
         self.fusion = CrossAttentionFusion(embed_dim=feature_dim)
         
         # 簡單的 2D Pose 回歸頭
-        self.pose_head = nn.Sequential(
-            nn.AdaptiveAvgPool2d((1, 1)),
-            nn.Flatten(),
-            nn.Linear(feature_dim, 1024),
-            nn.ReLU(),
-            nn.Dropout(0.2),
-            nn.Linear(1024, num_joints * 2) # 改為預測 2D 座標 (X, Y)
-        )
+        self.pose_head = PoseHead(feature_dim, num_joints)
         self.num_joints = num_joints
 
     def forward(self, views, temperature=1.0):
@@ -132,8 +144,7 @@ class Who2comPoseNet(nn.Module):
         fused_feat = self.fusion(ego_feat, selected_feat) # (B, 2048, 8, 8)
         
         # 5. 回歸 2D 關節點 (X, Y)
-        pose_flat = self.pose_head(fused_feat) # (B, J*2)
-        pose_2d = pose_flat.view(B, self.num_joints, 2)
+        pose_2d, _ = self.pose_head(fused_feat) # (B, J, 2)
         
         # 回傳預測的 Pose，以及注意力權重(用來觀測我們挑了哪一個視角)
         return pose_2d, weights

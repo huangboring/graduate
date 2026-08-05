@@ -38,13 +38,13 @@ def server_thread(ip, port):
                 if hand is not None:
                     send_tensor(client_sock, hand)
                 else:
-                    # 如果還沒準備好，傳送一個全為零的 Dummy Tensor
-                    send_tensor(client_sock, torch.zeros(1, 2048, 1, 1))
+                    # 如果還沒準備好，傳送一個全為零的 Dummy Tensor (512 維度對應 ResNet-18)
+                    send_tensor(client_sock, torch.zeros(1, 512, 1, 1))
             elif req == "REQ_FEATURE":
                 if feat is not None:
                     send_tensor(client_sock, feat)
                 else:
-                    send_tensor(client_sock, torch.zeros(1, 2048, 8, 8))
+                    send_tensor(client_sock, torch.zeros(1, 512, 8, 8))
         except Exception as e:
             print(f"[!] 伺服器處理錯誤: {e}")
         finally:
@@ -71,13 +71,13 @@ def main():
     parser = argparse.ArgumentParser(description="Who2com P2P 分散式節點")
     parser.add_argument("--my-ip", type=str, default="127.0.0.1", help="本機的 IP")
     parser.add_argument("--my-port", type=int, default=5000, help="本機的連接埠")
-    parser.add_argument("--peers", type=str, default="127.0.0.1:5001", help="其他節點，用逗號分隔")
+    parser.add_argument("--peers", type=str, default="", help="其他節點，用逗號分隔 (留空代表獨立運作)")
     parser.add_argument("--cam", type=int, default=0, help="本機要使用的 Webcam ID")
     args = parser.parse_args()
 
     # 解析 Peers
     peer_list = []
-    if args.peers:
+    if args.peers and args.peers.lower() != "none":
         for p in args.peers.split(','):
             ip, port = p.split(':')
             peer_list.append((ip, int(port)))
@@ -90,7 +90,7 @@ def main():
     print("[*] 正在載入神經網路...")
     extractor = FeatureExtractor()
     matchmaker = Matchmaker(feature_dim=512)
-    fusion = CrossAttentionFusion(feature_dim=512)
+    fusion = CrossAttentionFusion(embed_dim=512)
     pose_head = PoseHead(feature_dim=512, num_joints=17)
     
     # 全部設定為 eval 模式 (Demo 不做訓練)
@@ -118,7 +118,7 @@ def main():
 
             # 1. 自己看畫面 (Ego)
             my_feature = extractor(img_tensor)
-            my_handshake = matchmaker(my_feature) # (1, 512, 1, 1)
+            my_handshake = matchmaker.gap(my_feature) # 只需要生成壓縮版的名片 (1, 512, 1, 1)
 
             # 更新全域變數，讓背景 Server 可以把這些資料發給別人
             global latest_feature_map, latest_handshake
@@ -141,12 +141,17 @@ def main():
             selected_feature = None
             if len(peer_handshakes) > 0:
                 # 您的神切入點：Ego 必須先評估「自己」的狀況！
-                # 把自己的名片也加入評分池中
-                best_score = torch.sum(my_handshake * my_handshake).item()
+                # 把自己的名片也加入評分網路 (Scorer) 中
+                msg_ego_flat = my_handshake.view(1, -1)
+                concat_self = torch.cat([msg_ego_flat, msg_ego_flat], dim=1)
+                best_score = matchmaker.scorer(concat_self).item()
                 best_peer_idx = -1 # -1 代表選自己
                 
                 for i, peer_hs in enumerate(peer_handshakes):
-                    score = torch.sum(my_handshake * peer_hs).item()
+                    peer_hs_flat = peer_hs.view(1, -1)
+                    concat_peer = torch.cat([msg_ego_flat, peer_hs_flat], dim=1)
+                    score = matchmaker.scorer(concat_peer).item()
+                    
                     if score > best_score:
                         best_score = score
                         best_peer_idx = i
