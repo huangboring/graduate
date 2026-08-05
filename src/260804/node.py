@@ -142,13 +142,13 @@ def main():
             if len(peer_handshakes) > 0:
                 # 您的神切入點：Ego 必須先評估「自己」的狀況！
                 # 把自己的名片也加入評分網路 (Scorer) 中
-                msg_ego_flat = my_handshake.view(1, -1)
+                msg_ego_flat = my_handshake.reshape(1, -1)
                 concat_self = torch.cat([msg_ego_flat, msg_ego_flat], dim=1)
                 best_score = matchmaker.scorer(concat_self).item()
                 best_peer_idx = -1 # -1 代表選自己
                 
                 for i, peer_hs in enumerate(peer_handshakes):
-                    peer_hs_flat = peer_hs.view(1, -1)
+                    peer_hs_flat = peer_hs.reshape(1, -1)
                     concat_peer = torch.cat([msg_ego_flat, peer_hs_flat], dim=1)
                     score = matchmaker.scorer(concat_peer).item()
                     

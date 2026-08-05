@@ -49,5 +49,4 @@ def extract_frames(data_dir="./data/160422_ultimatum1", target_size=(256, 256)):
 if __name__ == "__main__":
     print("=== CMU Panoptic 影片抽圖與壓縮腳本 ===")
     print("此腳本會將 MP4 影片的每一幀抽取出來，並直接壓縮成 256x256 的小圖。")
-    print("這樣做可以幫您省下好幾 GB 的硬碟空間，並且讓神經網路訓練快上 10 倍！")
     extract_frames()

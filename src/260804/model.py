@@ -18,12 +18,12 @@ class FeatureExtractor(nn.Module):
         return self.backbone(x)
 
 class Matchmaker(nn.Module):
-    def __init__(self, feature_dim=2048):
+    def __init__(self, feature_dim=512):
         super().__init__()
         # 握手訊息生成器 (Handshake Message Generator)
         self.gap = nn.AdaptiveAvgPool2d((1, 1))
         
-        # 評分網路，輸入為 Ego 與 Other 的握手訊息串接 (2048 * 2)
+        # 評分網路，輸入為 Ego 與 Other 的握手訊息串接 (feature_dim * 2)
         self.scorer = nn.Sequential(
             nn.Linear(feature_dim * 2, 512),
             nn.ReLU(),
@@ -32,31 +32,28 @@ class Matchmaker(nn.Module):
 
     def forward(self, ego_feat, other_feats):
         """
-        ego_feat: (B, 2048, 8, 8)
-        other_feats: (B, N_others, 2048, 8, 8)
+        ego_feat: (B, C, 8, 8)
+        other_feats: (B, N_others, C, 8, 8)
         返回: 挑選出的分數分布 (B, N_others)
         """
         B, N, C, H, W = other_feats.shape
         
         # 產生握手訊息
-        # (B, 2048)
-        msg_ego = self.gap(ego_feat).view(B, -1) 
-        # (B, N_others, 2048) -> (B*N_others, 2048)
-        msg_other = self.gap(other_feats.view(B*N, C, H, W)).view(B*N, -1)
+        msg_ego = self.gap(ego_feat).reshape(B, -1) 
+        msg_other = self.gap(other_feats.reshape(B*N, C, H, W)).reshape(B*N, -1)
         
         # 重複 Ego 的握手訊息去跟每個人配對
-        # (B, N_others, 2048)
         msg_ego_repeated = msg_ego.unsqueeze(1).expand(-1, N, -1).reshape(B*N, -1)
         
         # 串接並評分
-        concat_msg = torch.cat([msg_ego_repeated, msg_other], dim=1) # (B*N, 4096)
+        concat_msg = torch.cat([msg_ego_repeated, msg_other], dim=1) # (B*N, C*2)
         scores = self.scorer(concat_msg) # (B*N, 1)
-        scores = scores.view(B, N) # (B, N_others)
+        scores = scores.reshape(B, N) # (B, N_others)
         
         return scores
 
 class CrossAttentionFusion(nn.Module):
-    def __init__(self, embed_dim=2048, num_heads=8):
+    def __init__(self, embed_dim=512, num_heads=8):
         super().__init__()
         # 使用 PyTorch 內建的 MultiheadAttention
         self.attention = nn.MultiheadAttention(embed_dim=embed_dim, num_heads=num_heads, batch_first=True)
@@ -69,8 +66,8 @@ class CrossAttentionFusion(nn.Module):
         """
         B, C, H, W = ego_feat.shape
         # 將特徵圖拉平成 Sequence (B, H*W, C)
-        query = ego_feat.view(B, C, -1).permute(0, 2, 1)
-        key_val = selected_feat.view(B, C, -1).permute(0, 2, 1)
+        query = ego_feat.reshape(B, C, -1).permute(0, 2, 1)
+        key_val = selected_feat.reshape(B, C, -1).permute(0, 2, 1)
         
         # Cross Attention: 讓 Ego (Query) 去找 Selected (Key/Value) 中有用的資訊
         attn_out, _ = self.attention(query, key_val, key_val)
@@ -79,7 +76,7 @@ class CrossAttentionFusion(nn.Module):
         fused = self.norm(query + attn_out)
         
         # 恢復成特徵圖形狀 (B, C, H, W)
-        fused_feat = fused.permute(0, 2, 1).view(B, C, H, W)
+        fused_feat = fused.permute(0, 2, 1).reshape(B, C, H, W)
         return fused_feat
 
 class PoseHead(nn.Module):
@@ -92,13 +89,14 @@ class PoseHead(nn.Module):
             nn.Linear(feature_dim, 1024),
             nn.ReLU(),
             nn.Dropout(0.2),
-            nn.Linear(1024, num_joints * 2) # 2D 座標 (X, Y)
+            nn.Linear(1024, num_joints * 2), # 2D 座標 (X, Y)
+            nn.Sigmoid() # 歸一化輸出至 [0, 1] 區間
         )
 
     def forward(self, x):
         # x: (B, feature_dim, H, W)
         pose_flat = self.head(x) # (B, J*2)
-        pose_2d = pose_flat.view(x.size(0), self.num_joints, 2)
+        pose_2d = pose_flat.reshape(x.size(0), self.num_joints, 2)
         return pose_2d, None # 為了與 node.py 相容，第二個回傳值留空
 
 class Who2comPoseNet(nn.Module):
@@ -122,11 +120,11 @@ class Who2comPoseNet(nn.Module):
         
         # 1. 獨立萃取所有視角的特徵圖 (Shared Weights)
         # 將 B 和 V 合併送入 Extractor 以平行運算
-        all_feats = self.extractor(views.view(B*V, C, H, W))
-        all_feats = all_feats.view(B, V, -1, all_feats.shape[-2], all_feats.shape[-1]) # (B, V, 2048, 8, 8)
+        all_feats = self.extractor(views.reshape(B*V, C, H, W))
+        all_feats = all_feats.reshape(B, V, -1, all_feats.shape[-2], all_feats.shape[-1]) # (B, V, 512, 8, 8)
         
         ego_feat = all_feats[:, 0]
-        other_feats = all_feats[:, 1:] # (B, V-1, 2048, 8, 8)
+        other_feats = all_feats[:, 1:] # (B, V-1, 512, 8, 8)
         
         # 2. Matchmaker 評分與 Top-1 挑選
         scores = self.matchmaker(ego_feat, other_feats) # (B, V-1)
@@ -136,12 +134,12 @@ class Who2comPoseNet(nn.Module):
         weights = F.gumbel_softmax(scores, tau=temperature, hard=True, dim=-1) # (B, V-1)
         
         # 3. 提取被選中的特徵圖
-        # weight: (B, V-1, 1, 1, 1) 乘以 other_feats: (B, V-1, 2048, 8, 8) 然後加總
-        weights_expanded = weights.view(B, V-1, 1, 1, 1)
-        selected_feat = (other_feats * weights_expanded).sum(dim=1) # (B, 2048, 8, 8)
+        # weight: (B, V-1, 1, 1, 1) 乘以 other_feats: (B, V-1, 512, 8, 8) 然後加總
+        weights_expanded = weights.reshape(B, V-1, 1, 1, 1)
+        selected_feat = (other_feats * weights_expanded).sum(dim=1) # (B, 512, 8, 8)
         
         # 4. 特徵融合 (Cross Attention)
-        fused_feat = self.fusion(ego_feat, selected_feat) # (B, 2048, 8, 8)
+        fused_feat = self.fusion(ego_feat, selected_feat) # (B, 512, 8, 8)
         
         # 5. 回歸 2D 關節點 (X, Y)
         pose_2d, _ = self.pose_head(fused_feat) # (B, J, 2)

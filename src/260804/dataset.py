@@ -40,16 +40,22 @@ class CMUMultiViewPoseDataset(Dataset):
         else:
             print(f"[警告] 找不到相機校正檔: {calib_path}")
 
-        # 掃描 3D 關節點 JSON (找出有幾幀畫面)
-        # 使用 os.walk 遞迴搜尋，避免 Windows 解壓縮軟體造成「資料夾包資料夾」的嵌套問題
+        # 掃描 3D 關節點 JSON (找出有幾幀畫面，並過濾掉無人體標註的無效幀)
         self.pose3d_dir = os.path.join(root_dir, "hdPose3d_stage1_coco19")
         self.frames = []
         if os.path.exists(self.pose3d_dir):
             for root, dirs, files in os.walk(self.pose3d_dir):
                 for f in sorted(files):
                     if f.endswith('.json'):
-                        # 記錄相對路徑或絕對路徑，為了簡化我們這裡記錄完整路徑
-                        self.frames.append(os.path.join(root, f))
+                        full_path = os.path.join(root, f)
+                        # 預檢查標註內容，過濾掉沒有人體的無效 JSON
+                        try:
+                            with open(full_path, 'r') as fp:
+                                p_data = json.load(fp)
+                                if len(p_data.get('bodies', [])) > 0:
+                                    self.frames.append(full_path)
+                        except Exception:
+                            pass
         else:
             print(f"[警告] 找不到 3D 關節點資料夾: {self.pose3d_dir}。請確認已解壓縮 .tar 檔！")
             
@@ -60,18 +66,25 @@ class CMUMultiViewPoseDataset(Dataset):
             self.is_dummy = True
         else:
             self.is_dummy = False
-            print(f"[*] 成功載入 CMU Dataset: 找到 {len(self.frames)} 幀標註資料。")
+            print(f"[*] 成功載入 CMU Dataset: 找到 {len(self.frames)} 幀有效標註資料。")
 
     def __len__(self):
         return len(self.frames)
 
     def project_3d_to_2d(self, pt3d, K, R, t):
-        # pt3d: (3,)
+        # 確保 pt3d 是 shape (3, 1) 的行向量進行矩陣運算
+        pt3d = pt3d.reshape(3, 1)
+        
+        # 轉換成齊次座標 (4, 1) 或是直接利用 K, R, t 進行投影
+        # CMU 的 R 是 (3,3), t 是 (3,1) 或 (3,)
+        t = t.reshape(3, 1)
         pt3d_cam = R @ pt3d + t
         pt2d_homo = K @ pt3d_cam
-        # 避免除以零
-        z = pt2d_homo[2] if pt2d_homo[2] != 0 else 1e-5
-        x, y = pt2d_homo[0] / z, pt2d_homo[1] / z
+        
+        # 確保明確取出純量 (scalar)
+        z = float(pt2d_homo[2, 0]) if float(pt2d_homo[2, 0]) != 0 else 1e-5
+        x = float(pt2d_homo[0, 0]) / z
+        y = float(pt2d_homo[1, 0]) / z
         return x, y
 
     def __getitem__(self, idx):
@@ -89,7 +102,7 @@ class CMUMultiViewPoseDataset(Dataset):
         with open(pose_path, 'r') as f:
             pose_data = json.load(f)
             
-        # 簡單起見，我們只抓第一個人 (bodies[0])
+        # 抓第一個人 (bodies[0])
         if len(pose_data['bodies']) > 0:
             joints_19 = np.array(pose_data['bodies'][0]['joints19']).reshape(-1, 4)
             # 取前 17 個點的 X, Y, Z (第四個數字是 confidence)
@@ -136,7 +149,16 @@ class CMUMultiViewPoseDataset(Dataset):
         
         return images_tensor, gt_2d_tensor
 
-def get_dataloader(data_dir="./data/160422_ultimatum1", batch_size=4, num_views=3, num_joints=17, shuffle=True):
+def get_dataloader(data_dir=None, batch_size=4, num_views=3, num_joints=17, shuffle=True):
+    if data_dir is None or not os.path.exists(data_dir):
+        # 自動定位腳本同目錄下的 data/160422_ultimatum1
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        default_dir = os.path.join(base_dir, "data", "160422_ultimatum1")
+        if os.path.exists(default_dir):
+            data_dir = default_dir
+        elif data_dir is None:
+            data_dir = "./data/160422_ultimatum1"
+
     dataset = CMUMultiViewPoseDataset(
         root_dir=data_dir, 
         num_views=num_views

@@ -1,0 +1,33 @@
+﻿# Python 快取與編譯檔
+__pycache__/
+*.py[cod]
+*.class
+
+# 虛擬環境與套件
+venv/
+env/
+.env/
+torch_packages/
+pip_temp/
+pip_cache/
+
+# 機器學習模型權重
+*.pth
+*.pt
+*.ckpt
+*.onnx
+
+# 專案特定資料集 (非常重要：避免把巨大資料推上 Git)
+data/
+datasets/
+hdPose3d_stage1_coco19/
+hdVideos/
+
+# 日誌與暫存檔
+*.log
+logs/
+.DS_Store
+
+# IDE 設定 (可選)
+.vscode/
+.idea/

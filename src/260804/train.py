@@ -21,7 +21,7 @@ def train():
     
     # 3. 設定優化器與損失函數
     optimizer = optim.AdamW(model.parameters(), lr=learning_rate)
-    criterion = nn.MSELoss() # 回歸 3D 座標使用 MSE
+    criterion = nn.SmoothL1Loss() # 使用 SmoothL1Loss (Huber Loss) 回歸關節座標
 
     # 4. 訓練迴圈
     model.train()
@@ -69,7 +69,7 @@ def train():
     plt.plot(range(1, num_epochs+1), epoch_losses, marker='o', color='b', label='Training Loss')
     plt.title('Training Loss Curve')
     plt.xlabel('Epoch')
-    plt.ylabel('MSE Loss')
+    plt.ylabel('Smooth L1 Loss')
     plt.legend()
     plt.grid(True)
     plt.savefig('loss_curve.png')
