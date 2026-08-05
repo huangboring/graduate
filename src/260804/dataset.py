@@ -41,13 +41,15 @@ class CMUMultiViewPoseDataset(Dataset):
             print(f"[警告] 找不到相機校正檔: {calib_path}")
 
         # 掃描 3D 關節點 JSON (找出有幾幀畫面)
+        # 使用 os.walk 遞迴搜尋，避免 Windows 解壓縮軟體造成「資料夾包資料夾」的嵌套問題
         self.pose3d_dir = os.path.join(root_dir, "hdPose3d_stage1_coco19")
         self.frames = []
         if os.path.exists(self.pose3d_dir):
-            all_files = sorted(os.listdir(self.pose3d_dir))
-            for f in all_files:
-                if f.endswith('.json'):
-                    self.frames.append(f)
+            for root, dirs, files in os.walk(self.pose3d_dir):
+                for f in sorted(files):
+                    if f.endswith('.json'):
+                        # 記錄相對路徑或絕對路徑，為了簡化我們這裡記錄完整路徑
+                        self.frames.append(os.path.join(root, f))
         else:
             print(f"[警告] 找不到 3D 關節點資料夾: {self.pose3d_dir}。請確認已解壓縮 .tar 檔！")
             
@@ -79,10 +81,11 @@ class CMUMultiViewPoseDataset(Dataset):
             gt_2d_pose = torch.rand(17, 2)
             return images, gt_2d_pose
 
-        frame_file = self.frames[idx]
+        pose_path = self.frames[idx] # 現在這已經是完整路徑了
+        # 取得純檔名用來找圖片
+        frame_filename = os.path.basename(pose_path)
         
         # 1. 讀取 3D 關節點 (Ground Truth)
-        pose_path = os.path.join(self.pose3d_dir, frame_file)
         with open(pose_path, 'r') as f:
             pose_data = json.load(f)
             
@@ -105,7 +108,7 @@ class CMUMultiViewPoseDataset(Dataset):
         
         for v_idx, cam_name in enumerate(self.cams):
             # 讀取圖片 (CMU 的檔名通常是 00000000.json 對應到 00000000.jpg 類似的格式)
-            frame_num = frame_file.replace('body3DScene_', '').replace('.json', '')
+            frame_num = frame_filename.replace('body3DScene_', '').replace('.json', '')
             img_path = os.path.join(self.root_dir, "hdVideos", f"hd_{cam_name}", f"{frame_num}.jpg")
             
             if os.path.exists(img_path):
