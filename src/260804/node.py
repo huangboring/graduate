@@ -6,7 +6,8 @@ import numpy as np
 import torch
 import cv2
 
-from model import FeatureExtractor, Matchmaker, CrossAttentionFusion, PoseHead
+import os
+from model import FeatureExtractor, Matchmaker, CrossAttentionFusion, PoseHead, Who2comPoseNet
 from net_utils import send_tensor, recv_tensor
 
 # 全域變數，用來讓 Ego (主執行緒) 算完特徵後，分享給 Server (背景執行緒) 傳送給別人
@@ -88,10 +89,21 @@ def main():
 
     # 2. 載入模型組件
     print("[*] 正在載入神經網路...")
-    extractor = FeatureExtractor()
-    matchmaker = Matchmaker(feature_dim=512)
-    fusion = CrossAttentionFusion(embed_dim=512)
-    pose_head = PoseHead(feature_dim=512, num_joints=17)
+    
+    # 建立完整模型以載入我們在 train.py 訓練並儲存的權重檔
+    net = Who2comPoseNet(num_views=3)
+    weight_path = "who2com_pose_fast.pth"
+    if os.path.exists(weight_path):
+        print(f"[*] 成功找到並載入訓練好的權重: {weight_path}")
+        net.load_state_dict(torch.load(weight_path, map_location='cpu'))
+    else:
+        print(f"[!] 找不到權重檔 {weight_path}，目前將使用隨機權重進行 Demo！")
+
+    # 提取子模組供分散式推論使用
+    extractor = net.extractor
+    matchmaker = net.matchmaker
+    fusion = net.fusion
+    pose_head = net.pose_head
     
     # 全部設定為 eval 模式 (Demo 不做訓練)
     extractor.eval()
