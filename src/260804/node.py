@@ -144,28 +144,30 @@ def main():
             # 3. 挑選最適合的夥伴 (Matchmaking)
             selected_feature = None
             if len(peer_handshakes) > 0:
-                # 這裡為了簡單示範，我們隨機挑選或直接用內積算分數
-                # 論文中是用 Attention，為了 Demo 穩定，我們用 cosine similarity
-                best_score = -999
-                best_peer_idx = -1
+                # 您的神切入點：Ego 必須先評估「自己」的狀況！
+                # 把自己的名片也加入評分池中
+                best_score = torch.sum(my_handshake * my_handshake).item()
+                best_peer_idx = -1 # -1 代表選自己
+                
                 for i, peer_hs in enumerate(peer_handshakes):
                     score = torch.sum(my_handshake * peer_hs).item()
                     if score > best_score:
                         best_score = score
                         best_peer_idx = i
                 
-                # 去向最高分的夥伴索取完整特徵圖
-                best_ip, best_port = valid_peers[best_peer_idx]
-                print(f"[Ego] 覺得 {best_ip}:{best_port} 最有幫助 (Score: {best_score:.2f})，去要特徵圖！")
-                selected_feature = request_data(best_ip, best_port, "REQ_FEATURE")
+                if best_peer_idx == -1:
+                    print(f"[Ego] 我自己看得很清楚 (Score: {best_score:.2f})，不需要麻煩別人，節省頻寬！")
+                else:
+                    best_ip, best_port = valid_peers[best_peer_idx]
+                    print(f"[Ego] 覺得我被遮蔽了，而且 {best_ip}:{best_port} 最有幫助 (Score: {best_score:.2f})，去要特徵圖！")
+                    selected_feature = request_data(best_ip, best_port, "REQ_FEATURE")
 
             # 4. 特徵融合 (Cross-Attention Fusion)
             if selected_feature is not None and selected_feature.shape[1] == 512:
                 final_feature = fusion(my_feature, selected_feature)
             else:
-                # 如果大家都斷線，或者沒有人有用的資訊，只好自己硬算
+                # 如果選了自己，或者大家都斷線，就只用自己的特徵
                 final_feature = my_feature
-                print("[Ego] 沒有取得其他人的特徵，只能靠自己單打獨鬥！")
 
             # 5. 預測 3D 關節點並畫圖
             pred_pose = pose_head(final_feature)
