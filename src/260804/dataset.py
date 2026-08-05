@@ -8,7 +8,7 @@ class DummyMultiViewPoseDataset(Dataset):
         :param num_samples: 總資料筆數
         :param num_views: 攝影機視角數量 (包含 Ego 視角)
         :param image_size: 影像的長寬
-        :param num_joints: 3D 關節點的數量 (通常為 17)
+        :param num_joints: 2D 關節點的數量 (通常為 17)
         """
         self.num_samples = num_samples
         self.num_views = num_views
@@ -23,11 +23,11 @@ class DummyMultiViewPoseDataset(Dataset):
         # 在現實中，這裡應該是讀取多張照片並做 Transform
         images = torch.rand(self.num_views, 3, self.image_size, self.image_size)
         
-        # 模擬產生真實的 3D 關節點 (J, 3) 
-        # (通常相對於 Ego 視角的 Root Joint，數值範圍依需求而定，這裡假設在 -1 到 1 之間)
-        gt_3d_pose = torch.rand(self.num_joints, 3) * 2 - 1.0
+        # 模擬產生真實的 2D 關節點 (J, 2) 
+        # (數值範圍在 0 到 1 之間，代表在圖片上的正規化座標)
+        gt_2d_pose = torch.rand(self.num_joints, 2)
         
-        return images, gt_3d_pose
+        return images, gt_2d_pose
 
 def get_dataloader(batch_size=8, num_samples=100, num_views=4, num_joints=17, shuffle=True):
     dataset = DummyMultiViewPoseDataset(
@@ -44,5 +44,5 @@ if __name__ == "__main__":
     for batch_idx, (images, poses) in enumerate(dataloader):
         print(f"Batch {batch_idx}:")
         print(f" - Images shape: {images.shape} (B, V, C, H, W)")
-        print(f" - Poses shape:  {poses.shape} (B, J, 3)")
+        print(f" - Poses shape:  {poses.shape} (B, J, 2)")
         break

@@ -5,7 +5,6 @@ import time
 import numpy as np
 import torch
 import cv2
-import matplotlib.pyplot as plt
 
 from model import FeatureExtractor, Matchmaker, CrossAttentionFusion, PoseHead
 from net_utils import send_tensor, recv_tensor
@@ -103,10 +102,7 @@ def main():
     # 開啟攝影機
     cap = cv2.VideoCapture(args.cam)
     
-    # 準備 3D 繪圖視窗
-    plt.ion()
-    fig = plt.figure(figsize=(8, 8))
-    ax = fig.add_subplot(111, projection='3d')
+    # (移除 3D 繪圖視窗)
     
     print("[*] 開始執行分散式協同推論迴圈！")
     
@@ -169,22 +165,25 @@ def main():
                 # 如果選了自己，或者大家都斷線，就只用自己的特徵
                 final_feature = my_feature
 
-            # 5. 預測 3D 關節點並畫圖
-            pred_pose = pose_head(final_feature)
-            joints_3d = pred_pose[0].numpy()
+            # 5. 預測 2D 關節點並畫在畫面上 (AR 疊加)
+            # 這裡回傳的 pose_2d 會包含 (17, 2) 的座標
+            # 為了簡單起見，我們假設網路輸出的是相對於 256x256 的正規化座標 (0~1) 
+            # 或是直接相對於原圖的座標。這裡我們將其縮放回原圖解析度。
+            pred_pose, _ = pose_head(final_feature) 
+            joints_2d = pred_pose[0].cpu().numpy() # (17, 2)
             
-            # 畫骨架
-            ax.clear()
-            ax.scatter(joints_3d[:, 0], joints_3d[:, 2], joints_3d[:, 1], c='red', s=50)
-            ax.set_title(f"Node {args.my_port} - 3D Pose")
-            ax.set_xlim(-1, 1)
-            ax.set_ylim(0, 2)
-            ax.set_zlim(-1, 1)
-            plt.draw()
-            plt.pause(0.01)
-
-            # 秀出攝影機畫面
-            cv2.imshow(f"Camera View {args.my_port}", frame)
+            h, w, _ = frame.shape
+            
+            # 在原圖上畫出關節點
+            for i in range(17):
+                x = int(joints_2d[i, 0] * w) # 如果輸出不是 0~1，這行可能需要調整
+                y = int(joints_2d[i, 1] * h)
+                
+                # 畫紅色圓點
+                cv2.circle(frame, (x, y), 5, (0, 0, 255), -1)
+                
+            # 秀出擴增實境 (AR) 疊加畫面
+            cv2.imshow(f"AR Camera View {args.my_port}", frame)
             if cv2.waitKey(1) & 0xFF == ord('q'):
                 break
                 

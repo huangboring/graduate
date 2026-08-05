@@ -90,14 +90,14 @@ class Who2comPoseNet(nn.Module):
         self.matchmaker = Matchmaker(feature_dim)
         self.fusion = CrossAttentionFusion(embed_dim=feature_dim)
         
-        # 簡單的 3D Pose 回歸頭
+        # 簡單的 2D Pose 回歸頭
         self.pose_head = nn.Sequential(
             nn.AdaptiveAvgPool2d((1, 1)),
             nn.Flatten(),
             nn.Linear(feature_dim, 1024),
             nn.ReLU(),
             nn.Dropout(0.2),
-            nn.Linear(1024, num_joints * 3)
+            nn.Linear(1024, num_joints * 2) # 改為預測 2D 座標 (X, Y)
         )
         self.num_joints = num_joints
 
@@ -131,12 +131,12 @@ class Who2comPoseNet(nn.Module):
         # 4. 特徵融合 (Cross Attention)
         fused_feat = self.fusion(ego_feat, selected_feat) # (B, 2048, 8, 8)
         
-        # 5. 回歸 3D 關節點
-        pose_flat = self.pose_head(fused_feat) # (B, J*3)
-        pose_3d = pose_flat.view(B, self.num_joints, 3)
+        # 5. 回歸 2D 關節點 (X, Y)
+        pose_flat = self.pose_head(fused_feat) # (B, J*2)
+        pose_2d = pose_flat.view(B, self.num_joints, 2)
         
         # 回傳預測的 Pose，以及注意力權重(用來觀測我們挑了哪一個視角)
-        return pose_3d, weights
+        return pose_2d, weights
 
 if __name__ == "__main__":
     # 測試網路
