@@ -11,11 +11,12 @@ torch_packages/
 pip_temp/
 pip_cache/
 
-# 機器學習模型權重
+# 機器學習模型權重 (預設排除所有，但允許特定的檔案)
 *.pth
 *.pt
 *.ckpt
 *.onnx
+!who2com_pose_fast.pth
 
 # 專案特定資料集 (非常重要：避免把巨大資料推上 Git)
 data/
