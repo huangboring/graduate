@@ -7,7 +7,7 @@ import numpy as np
 import torch
 import cv2
 
-from model import FeatureExtractor, Matchmaker, CrossAttentionFusion, PoseHead, Who2comPoseNet
+from model import FeatureExtractor, Matchmaker, CommunicationGate, CrossAttentionFusion, PoseHead, When2comPoseNet
 from net_utils import send_tensor, recv_tensor
 
 # 全域變數，用來讓 Ego (主執行緒) 算完特徵後，分享給 Server (背景執行緒) 傳送給別人
@@ -69,12 +69,13 @@ SKELETON = [
 ]
 
 def main():
-    parser = argparse.ArgumentParser(description="Who2com P2P 分散式節點 (Visibility-Aware)")
+    parser = argparse.ArgumentParser(description="When2com P2P 分散式節點 (Visibility-Aware + Communication Gate)")
     parser.add_argument("--my-ip", type=str, default="127.0.0.1", help="本機的 IP")
     parser.add_argument("--my-port", type=int, default=5000, help="本機的連接埠")
     parser.add_argument("--peers", type=str, default="", help="其他節點，用逗號分隔")
     parser.add_argument("--cam", type=int, default=0, help="本機要使用的 Webcam ID")
     parser.add_argument("--vis-threshold", type=float, default=0.5, help="可見性門檻 (低於此值的關節不顯示)")
+    parser.add_argument("--comm-threshold", type=float, default=0.5, help="通訊閘門門檻 (低於此值則不發送 Handshake)")
     args = parser.parse_args()
 
     # 解析 Peers
@@ -90,11 +91,12 @@ def main():
 
     # 2. 載入模型組件 (自動載入訓練好的權重)
     print("[*] 正在載入神經網路...")
-    net = Who2comPoseNet(num_views=3)
+    net = When2comPoseNet(num_views=3)
     
     # 依序嘗試載入最佳模型或最終模型
     weight_path = None
-    for candidate in ["who2com_pose_best.pth", "who2com_pose_final.pth"]:
+    for candidate in ["when2com_pose_best.pth", "when2com_pose_final.pth",
+                       "who2com_pose_best.pth", "who2com_pose_final.pth"]:
         if os.path.exists(candidate):
             weight_path = candidate
             break
@@ -105,20 +107,24 @@ def main():
     else:
         print("[!] 找不到權重檔，目前將使用隨機權重進行 Demo！")
 
+    # 提取子模組
     extractor = net.extractor
     matchmaker = net.matchmaker
+    comm_gate = net.comm_gate
     fusion = net.fusion
     pose_head = net.pose_head
     
     extractor.eval()
     matchmaker.eval()
+    comm_gate.eval()
     fusion.eval()
     pose_head.eval()
 
     # 開啟攝影機
     cap = cv2.VideoCapture(args.cam)
     
-    print(f"[*] 開始執行分散式協同推論迴圈！(可見性門檻: {args.vis_threshold})")
+    print(f"[*] 開始執行 When2com 分散式協同推論迴圈！")
+    print(f"    可見性門檻: {args.vis_threshold} | 通訊閘門門檻: {args.comm_threshold}")
     
     with torch.no_grad():
         while True:
@@ -140,41 +146,55 @@ def main():
                 latest_feature_map = my_feature
                 latest_handshake = my_handshake
 
-            # 2. 向所有 Peers 索取他們的名片
-            peer_handshakes = []
-            valid_peers = []
-            for ip, port in peer_list:
-                hs = request_data(ip, port, "REQ_HANDSHAKE")
-                if hs is not None:
-                    if hs.shape[1] == 512:
-                        peer_handshakes.append(hs)
-                        valid_peers.append((ip, port))
-
-            # 3. 挑選最適合的夥伴
+            # 2. When2com 核心：先問閘門「我需不需要幫忙？」
+            comm_prob = comm_gate(my_feature)
+            need_comm = comm_prob.item() > args.comm_threshold
+            
             selected_feature = None
-            if len(peer_handshakes) > 0:
-                msg_ego_flat = my_handshake.reshape(1, -1)
-                concat_self = torch.cat([msg_ego_flat, msg_ego_flat], dim=1)
-                best_score = matchmaker.scorer(concat_self).item()
-                best_peer_idx = -1
-                
-                for i, peer_hs in enumerate(peer_handshakes):
-                    peer_hs_flat = peer_hs.reshape(1, -1)
-                    concat_peer = torch.cat([msg_ego_flat, peer_hs_flat], dim=1)
-                    score = matchmaker.scorer(concat_peer).item()
-                    
-                    if score > best_score:
-                        best_score = score
-                        best_peer_idx = i
-                
-                if best_peer_idx == -1:
-                    print(f"[Ego] 我自己看得很清楚 (Score: {best_score:.2f})")
-                else:
-                    best_ip, best_port = valid_peers[best_peer_idx]
-                    print(f"[Ego] {best_ip}:{best_port} 最有幫助 (Score: {best_score:.2f})")
-                    selected_feature = request_data(best_ip, best_port, "REQ_FEATURE")
+            comm_status = ""
+            
+            if not need_comm:
+                # 閘門說「不需要」→ 完全跳過 Handshake，節省頻寬
+                comm_status = f"Gate: {comm_prob.item():.2f} < {args.comm_threshold} | SKIP"
+            elif len(peer_list) == 0:
+                # 需要通訊但沒有隊友
+                comm_status = f"Gate: {comm_prob.item():.2f} | No peers"
+            else:
+                # 閘門說「需要」→ 才啟動 Handshake + Matchmaker 流程
+                peer_handshakes = []
+                valid_peers = []
+                for ip, port in peer_list:
+                    hs = request_data(ip, port, "REQ_HANDSHAKE")
+                    if hs is not None:
+                        if hs.shape[1] == 512:
+                            peer_handshakes.append(hs)
+                            valid_peers.append((ip, port))
 
-            # 4. 特徵融合
+                if len(peer_handshakes) > 0:
+                    msg_ego_flat = my_handshake.reshape(1, -1)
+                    concat_self = torch.cat([msg_ego_flat, msg_ego_flat], dim=1)
+                    best_score = matchmaker.scorer(concat_self).item()
+                    best_peer_idx = -1
+                    
+                    for i, peer_hs in enumerate(peer_handshakes):
+                        peer_hs_flat = peer_hs.reshape(1, -1)
+                        concat_peer = torch.cat([msg_ego_flat, peer_hs_flat], dim=1)
+                        score = matchmaker.scorer(concat_peer).item()
+                        
+                        if score > best_score:
+                            best_score = score
+                            best_peer_idx = i
+                    
+                    if best_peer_idx == -1:
+                        comm_status = f"Gate: {comm_prob.item():.2f} | Matchmaker: self best"
+                    else:
+                        best_ip, best_port = valid_peers[best_peer_idx]
+                        comm_status = f"Gate: {comm_prob.item():.2f} | Fusing with {best_ip}:{best_port}"
+                        selected_feature = request_data(best_ip, best_port, "REQ_FEATURE")
+                else:
+                    comm_status = f"Gate: {comm_prob.item():.2f} | Peers unreachable"
+
+            # 4. 特徵融合 (只有在真正拿到外部特徵時才融合)
             if selected_feature is not None and selected_feature.shape[1] == 512:
                 final_feature = fusion(my_feature, selected_feature)
             else:
@@ -188,26 +208,27 @@ def main():
             h, w, _ = frame.shape
             
             # 只繪製可見性高於門檻的關節
-            visible_joints = {}  # 記錄可見關節的座標，用於畫骨架線
+            visible_joints = {}
             for i in range(17):
                 if visibility[i] > args.vis_threshold:
                     x = int(joints_2d[i, 0] * w)
                     y = int(joints_2d[i, 1] * h)
                     visible_joints[i] = (x, y)
-                    # 畫綠色圓點 (可見的關節)
                     cv2.circle(frame, (x, y), 5, (0, 255, 0), -1)
             
-            # 繪製骨架連線 (只有兩端都可見的才畫)
+            # 繪製骨架連線
             for (a, b) in SKELETON:
                 if a in visible_joints and b in visible_joints:
                     cv2.line(frame, visible_joints[a], visible_joints[b], (0, 255, 255), 2)
             
-            # 在左上角顯示可見關節數量
+            # 在左上角顯示狀態資訊
             num_visible = len(visible_joints)
             cv2.putText(frame, f"Visible: {num_visible}/17", (10, 30),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+            cv2.putText(frame, comm_status, (10, 60),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
                 
-            cv2.imshow(f"AR Camera View {args.my_port}", frame)
+            cv2.imshow(f"When2com AR View {args.my_port}", frame)
             if cv2.waitKey(1) & 0xFF == ord('q'):
                 break
                 

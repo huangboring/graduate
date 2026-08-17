@@ -136,21 +136,37 @@ class CMUMultiViewPoseDataset(Dataset):
         return images_tensor, gt_2d_tensor, vis_tensor
 
 def get_dataset(data_dir=None, num_views=3):
-    """回傳 Dataset 物件，方便外部做 train/val split"""
+    """回傳 Dataset 物件，方便外部做 train/val split
+    
+    資料集搜尋順序：
+    1. 使用者手動指定的 data_dir
+    2. src/data/160422_ultimatum1  (程式碼目錄的上一層)
+    3. graduate/data/160422_ultimatum1 (專案根目錄)
+    4. 碩論/data/panoptic-toolbox-master/data/160422_ultimatum1 (原始下載位置)
+    5. ./data/160422_ultimatum1 (當前工作目錄)
+    """
     if data_dir is None or not os.path.exists(data_dir):
-        base_dir = os.path.dirname(os.path.abspath(__file__))
-        # 往上兩層找共用 data 資料夾
-        project_root = os.path.dirname(os.path.dirname(base_dir))
-        default_dir = os.path.join(project_root, "data", "160422_ultimatum1")
-        if os.path.exists(default_dir):
-            data_dir = default_dir
+        base_dir = os.path.dirname(os.path.abspath(__file__))  # 260814/
+        src_dir = os.path.dirname(base_dir)                     # src/
+        project_root = os.path.dirname(src_dir)                 # graduate/
+        thesis_root = os.path.dirname(project_root)             # 碩論/
+        
+        candidates = [
+            os.path.join(src_dir, "data", "160422_ultimatum1"),
+            os.path.join(project_root, "data", "160422_ultimatum1"),
+            os.path.join(thesis_root, "data", "panoptic-toolbox-master", "data", "160422_ultimatum1"),
+            os.path.join(src_dir, "260804", "data", "160422_ultimatum1"),
+            os.path.join(".", "data", "160422_ultimatum1"),
+        ]
+        
+        for candidate in candidates:
+            if os.path.exists(candidate):
+                data_dir = candidate
+                print(f"[*] 資料集路徑: {os.path.abspath(data_dir)}")
+                break
         else:
-            # 嘗試舊版路徑
-            old_dir = os.path.join(os.path.dirname(base_dir), "260804", "data", "160422_ultimatum1")
-            if os.path.exists(old_dir):
-                data_dir = old_dir
-            else:
-                data_dir = "./data/160422_ultimatum1"
+            data_dir = candidates[0]  # 預設使用第一個路徑
+            print(f"[!] 找不到資料集，預設路徑: {os.path.abspath(data_dir)}")
     
     return CMUMultiViewPoseDataset(root_dir=data_dir, num_views=num_views)
 
