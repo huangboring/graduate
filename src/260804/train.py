@@ -45,6 +45,12 @@ def train():
             # 計算 Loss
             loss = criterion(pred_poses, gt_poses)
             
+            # 計算 MPJPE (Mean Per Joint Position Error) 像素誤差
+            # 將 0~1 的座標乘上影像大小 256，計算真實的歐式距離 (Euclidean Distance)
+            with torch.no_grad():
+                pixel_dist = torch.norm((pred_poses - gt_poses) * 256.0, dim=-1) # (B, 17)
+                mpjpe = pixel_dist.mean().item()
+            
             # Backward Pass
             loss.backward()
             optimizer.step()
@@ -53,7 +59,7 @@ def train():
             
             if batch_idx % 5 == 0:
                 print(f"Epoch [{epoch+1}/{num_epochs}] Batch {batch_idx} | "
-                      f"Loss: {loss.item():.4f} | Temp: {temp:.2f} | "
+                      f"Loss: {loss.item():.4f} | MPJPE: {mpjpe:.1f} px | Temp: {temp:.2f} | "
                       f"Ego 選擇了 View 索引: {selection_weights[0].argmax().item() + 1}")
                 
         avg_loss = total_loss / len(train_loader)
