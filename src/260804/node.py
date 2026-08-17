@@ -39,7 +39,7 @@ def server_thread(ip, port):
                 if hand is not None:
                     send_tensor(client_sock, hand)
                 else:
-                    # 如果還沒準備好，傳送一個全為零的 Dummy Tensor (512 維度對應 ResNet-18)
+                    # (512 維度對應 ResNet-18)
                     send_tensor(client_sock, torch.zeros(1, 512, 1, 1))
             elif req == "REQ_FEATURE":
                 if feat is not None:

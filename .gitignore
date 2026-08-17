@@ -1,4 +1,4 @@
-﻿# Python 快取與編譯檔
+# Python 快取與編譯檔
 __pycache__/
 *.py[cod]
 *.class
@@ -11,18 +11,19 @@ torch_packages/
 pip_temp/
 pip_cache/
 
-# 機器學習模型權重 (預設排除所有，但允許特定的檔案)
+# 機器學習模型權重 (全面排除)
 *.pth
 *.pt
 *.ckpt
 *.onnx
-!who2com_pose_fast.pth
 
 # 專案特定資料集 (非常重要：避免把巨大資料推上 Git)
 data/
+src/data/
 datasets/
 hdPose3d_stage1_coco19/
 hdVideos/
+hd_*/
 
 # 日誌與暫存檔
 *.log
