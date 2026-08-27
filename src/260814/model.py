@@ -153,7 +153,13 @@ class When2comPoseNet(nn.Module):
         self.pose_head = PoseHead(feature_dim, num_joints)
         self.num_joints = num_joints
 
-    def forward(self, views, temperature=1.0, comm_threshold=0.5):
+    def forward(self, views, temperature=1.0, comm_threshold=0.5,
+                force_comm=False, force_no_comm=False):
+        """
+        Args:
+            force_comm:    True = 強制通訊，跳過閘門，直接用融合特徵 (Stage 1 訓練用)
+            force_no_comm: True = 強制不通訊，只用 Ego 特徵 (Stage 2 比較用)
+        """
         B, V, C, H, W = views.shape
         
         # 1. 萃取所有視角的特徵圖
@@ -178,13 +184,21 @@ class When2comPoseNet(nn.Module):
         fused_feat = self.fusion(ego_feat, selected_feat)
         
         # 6. 閘門決策
-        if self.training:
-            comm_decision = (comm_prob > comm_threshold).float() - comm_prob.detach() + comm_prob
+        if force_comm:
+            # Stage 1：強制使用融合特徵
+            final_feat = fused_feat
+        elif force_no_comm:
+            # Stage 2 比較用：強制只用 Ego 特徵
+            final_feat = ego_feat
         else:
-            comm_decision = (comm_prob > comm_threshold).float()
-        
-        gate = comm_decision.unsqueeze(-1).unsqueeze(-1)
-        final_feat = gate * fused_feat + (1 - gate) * ego_feat
+            # 正常推論：由閘門決定
+            if self.training:
+                comm_decision = (comm_prob > comm_threshold).float() - comm_prob.detach() + comm_prob
+            else:
+                comm_decision = (comm_prob > comm_threshold).float()
+            
+            gate = comm_decision.unsqueeze(-1).unsqueeze(-1)
+            final_feat = gate * fused_feat + (1 - gate) * ego_feat
         
         # 7. 預測
         pose_2d, visibility = self.pose_head(final_feat)
