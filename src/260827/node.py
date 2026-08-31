@@ -7,7 +7,7 @@ import numpy as np
 import torch
 import cv2
 
-from model import FeatureExtractor, Matchmaker, CommunicationGate, CrossAttentionFusion, PoseHead, When2comPoseNet
+from model import FeatureExtractor, Matchmaker, CommunicationGate, ResidualCrossAttentionFusion, PoseHead, When2comPoseNet
 from net_utils import send_tensor, recv_tensor
 
 # 全域變數，用來讓 Ego (主執行緒) 算完特徵後，分享給 Server (背景執行緒) 傳送給別人
