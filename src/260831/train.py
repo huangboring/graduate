@@ -7,7 +7,7 @@ from tqdm import tqdm
 import math
 
 from dataset import get_dataloader
-from model import When2comHeatmapNet
+from model import When2comHeatmapNet, soft_argmax_2d, get_confidence
 
 def train_stage1(model, loader, optimizer, epochs=60, device='cuda', save_dir='.'):
     """
@@ -119,10 +119,7 @@ def train_stage2(model, loader, optimizer, epochs=20, device='cuda', save_dir='.
                 pred_hm_no_comm = ego_hm
                 loss_no_comm = criterion_hm(pred_hm_no_comm * vis_mask, gt_ego_hm * vis_mask).view(B, -1).mean(dim=1)
                 
-                # 通訊 (最佳隊友)
-                ego_coords = model.decoder.soft_argmax_2d(ego_hm)
-                ego_conf = model.decoder.get_confidence(ego_hm)
-                # ... 省略 matchmaker 呼叫，為簡化直接取平均隊友當成通訊結果
+                # 通訊 (為簡化直接取平均隊友當成通訊結果)
                 selected_hm = other_hms.mean(dim=1) 
                 pred_hm_comm = model.fusion(ego_hm, selected_hm)
                 loss_comm = criterion_hm(pred_hm_comm * vis_mask, gt_ego_hm * vis_mask).view(B, -1).mean(dim=1)
@@ -178,7 +175,7 @@ if __name__ == "__main__":
     # =============== Stage 2 ===============
     print("\n--- 啟動 Stage 2 (Entropy Gate) ---")
     # 載入 Stage 1 權重
-    model.load_state_dict(torch.load("heatmap_stage1_latest.pth"))
+    model.load_state_dict(torch.load("heatmap_stage1_latest.pth", weights_only=True))
     
     # 凍結所有，只開 Gate
     for param in model.parameters():
