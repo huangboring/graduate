@@ -2,7 +2,7 @@ import socket
 import threading
 import torch
 import numpy as np
-from model import When2comHeatmapNet
+from model import When2comHeatmapNet, soft_argmax_2d, get_confidence
 from net_utils import send_tensor, recv_tensor, send_compressed_heatmap, recv_compressed_heatmap
 import time
 
@@ -88,8 +88,8 @@ class PeerNode:
             
             # 快取供別人請求
             self.current_hm = ego_hm.squeeze(0).cpu()
-            self.current_coords = self.model.decoder.soft_argmax_2d(ego_hm).squeeze(0).cpu()
-            self.current_conf = self.model.decoder.get_confidence(ego_hm).squeeze(0).cpu()
+            self.current_coords = soft_argmax_2d(ego_hm).squeeze(0).cpu()
+            self.current_conf = get_confidence(ego_hm).squeeze(0).cpu()
             
             # 2. Gate Decision
             comm_prob = self.model.gate(ego_hm).item()
@@ -146,7 +146,7 @@ class PeerNode:
                 print(f"[Node {self.node_id}] Decision: NO COMMUNICATE (Prob: {comm_prob:.2f})")
                 
             # 5. Final Prediction
-            final_coords = self.model.decoder.soft_argmax_2d(ego_hm)
+            final_coords = soft_argmax_2d(ego_hm)
             return final_coords
 
     def stop(self):
@@ -164,8 +164,9 @@ class PeerNode:
 
 if __name__ == "__main__":
     # Test script: Launch 2 nodes
-    node1 = PeerNode(1, 5001, peers=[(2, '127.0.0.1', 5002)])
-    node2 = PeerNode(2, 5002, peers=[(1, '127.0.0.1', 5001)])
+    weight_path = "heatmap_stage2_latest.pth"
+    node1 = PeerNode(1, 5001, peers=[(2, '127.0.0.1', 5002)], model_path=weight_path)
+    node2 = PeerNode(2, 5002, peers=[(1, '127.0.0.1', 5001)], model_path=weight_path)
     
     node1.start_server()
     node2.start_server()

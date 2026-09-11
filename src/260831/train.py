@@ -5,9 +5,10 @@ import torch.optim as optim
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 import math
+import matplotlib.pyplot as plt
 
 from dataset import get_dataloader
-from model import When2comHeatmapNet
+from model import When2comHeatmapNet, soft_argmax_2d, get_confidence
 
 def train_stage1(model, loader, optimizer, epochs=60, device='cuda', save_dir='.'):
     """
@@ -22,6 +23,10 @@ def train_stage1(model, loader, optimizer, epochs=60, device='cuda', save_dir='.
     criterion_coord = nn.SmoothL1Loss()
     
     os.makedirs(save_dir, exist_ok=True)
+    
+    epoch_losses = []
+    epoch_hm_losses = []
+    epoch_coord_losses = []
     
     for epoch in range(epochs):
         total_loss = 0
@@ -71,8 +76,43 @@ def train_stage1(model, loader, optimizer, epochs=60, device='cuda', save_dir='.
                 'alpha': f"{model.fusion.alpha.item():.4f}"
             })
             
-        print(f"Epoch {epoch+1} Avg Loss: {total_loss/len(loader):.4f} | Alpha: {model.fusion.alpha.item():.4f}")
+        avg_loss = total_loss/len(loader)
+        avg_hm = total_hm_loss/len(loader)
+        avg_coord = total_coord_loss/len(loader)
+        
+        epoch_losses.append(avg_loss)
+        epoch_hm_losses.append(avg_hm)
+        epoch_coord_losses.append(avg_coord)
+        
+        print(f"Epoch {epoch+1} Avg Loss: {avg_loss:.4f} | Alpha: {model.fusion.alpha.item():.4f}")
         torch.save(model.state_dict(), os.path.join(save_dir, "heatmap_stage1_latest.pth"))
+        
+    # === 繪製 Stage 1 圖表 ===
+    plt.figure(figsize=(15, 5))
+    
+    plt.subplot(1, 3, 1)
+    plt.plot(range(1, epochs+1), epoch_losses, 'b-o')
+    plt.title('Stage 1: Total Loss')
+    plt.xlabel('Epoch')
+    plt.ylabel('Loss')
+    plt.grid(True)
+    
+    plt.subplot(1, 3, 2)
+    plt.plot(range(1, epochs+1), epoch_hm_losses, 'r-s')
+    plt.title('Stage 1: Heatmap MSE Loss')
+    plt.xlabel('Epoch')
+    plt.grid(True)
+    
+    plt.subplot(1, 3, 3)
+    plt.plot(range(1, epochs+1), epoch_coord_losses, 'g-^')
+    plt.title('Stage 1: Coordinate SmoothL1 Loss')
+    plt.xlabel('Epoch')
+    plt.grid(True)
+    
+    plt.tight_layout()
+    plt.savefig(os.path.join(save_dir, 'stage1_curve.png'), dpi=150)
+    plt.close()
+    print(f"[*] Stage 1 圖表已儲存至 {os.path.join(save_dir, 'stage1_curve.png')}")
 
 def train_stage2(model, loader, optimizer, epochs=20, device='cuda', save_dir='.'):
     """
@@ -84,6 +124,9 @@ def train_stage2(model, loader, optimizer, epochs=20, device='cuda', save_dir='.
     
     criterion_gate = nn.BCELoss()
     criterion_hm = nn.MSELoss(reduction='none') # Per-sample 計算
+    
+    epoch_losses = []
+    epoch_accs = []
     
     for epoch in range(epochs):
         total_loss = 0
@@ -120,8 +163,8 @@ def train_stage2(model, loader, optimizer, epochs=20, device='cuda', save_dir='.
                 loss_no_comm = criterion_hm(pred_hm_no_comm * vis_mask, gt_ego_hm * vis_mask).view(B, -1).mean(dim=1)
                 
                 # 通訊 (最佳隊友)
-                ego_coords = model.decoder.soft_argmax_2d(ego_hm)
-                ego_conf = model.decoder.get_confidence(ego_hm)
+                ego_coords = soft_argmax_2d(ego_hm)
+                ego_conf = get_confidence(ego_hm)
                 # ... 省略 matchmaker 呼叫，為簡化直接取平均隊友當成通訊結果
                 selected_hm = other_hms.mean(dim=1) 
                 pred_hm_comm = model.fusion(ego_hm, selected_hm)
@@ -153,8 +196,37 @@ def train_stage2(model, loader, optimizer, epochs=20, device='cuda', save_dir='.
                 'acc': f"{correct_preds/total_samples:.4f}"
             })
             
-        print(f"Epoch {epoch+1} Avg Loss: {total_loss/len(loader):.4f} | Acc: {correct_preds/total_samples:.4f}")
+        avg_loss = total_loss/len(loader)
+        avg_acc = correct_preds/total_samples
+        
+        epoch_losses.append(avg_loss)
+        epoch_accs.append(avg_acc)
+        
+        print(f"Epoch {epoch+1} Avg Loss: {avg_loss:.4f} | Acc: {avg_acc:.4f}")
         torch.save(model.state_dict(), os.path.join(save_dir, "heatmap_stage2_latest.pth"))
+        
+    # === 繪製 Stage 2 圖表 ===
+    plt.figure(figsize=(10, 5))
+    
+    plt.subplot(1, 2, 1)
+    plt.plot(range(1, epochs+1), epoch_losses, 'b-o')
+    plt.title('Stage 2: Gate BCE Loss')
+    plt.xlabel('Epoch')
+    plt.ylabel('Loss')
+    plt.grid(True)
+    
+    plt.subplot(1, 2, 2)
+    plt.plot(range(1, epochs+1), epoch_accs, 'r-s')
+    plt.title('Stage 2: Gate Accuracy')
+    plt.xlabel('Epoch')
+    plt.ylabel('Accuracy')
+    plt.ylim(-0.05, 1.05)
+    plt.grid(True)
+    
+    plt.tight_layout()
+    plt.savefig(os.path.join(save_dir, 'stage2_curve.png'), dpi=150)
+    plt.close()
+    print(f"[*] Stage 2 圖表已儲存至 {os.path.join(save_dir, 'stage2_curve.png')}")
 
 if __name__ == "__main__":
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
