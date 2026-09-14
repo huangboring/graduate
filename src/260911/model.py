@@ -102,73 +102,26 @@ class EntropyGate(nn.Module):
         comm_prob = self.mlp(entropy) # (B, 1)
         return comm_prob
 
-class CompressedMatchmaker(nn.Module):
+class SoftmaxViewWeighter(nn.Module):
     def __init__(self, num_joints=17):
         super().__init__()
-        # 輸入：自己和對方的壓縮摘要 (x, y, confidence) -> 17*3 = 51
+        # 輸入：每個視角的壓縮摘要 (17*3 = 51)
         self.scorer = nn.Sequential(
-            nn.Linear(51 * 2, 64),
+            nn.Linear(51, 64),
             nn.ReLU(),
             nn.Linear(64, 32),
             nn.ReLU(),
             nn.Linear(32, 1)
         )
         
-    def forward(self, ego_coords, ego_conf, other_coords, other_conf):
-        """
-        所有維度: ego (B, 17, 2), (B, 17)
-                 other (B, V-1, 17, 2), (B, V-1, 17)
-        """
-        B, V_minus_1 = other_coords.shape[0], other_coords.shape[1]
-        
-        # 壓平 ego 摘要
-        ego_summary = torch.cat([ego_coords, ego_conf.unsqueeze(-1)], dim=-1) # (B, 17, 3)
-        ego_summary = ego_summary.view(B, -1).unsqueeze(1).expand(-1, V_minus_1, -1) # (B, V-1, 51)
-        
-        # 壓平 other 摘要
-        other_summary = torch.cat([other_coords, other_conf.unsqueeze(-1)], dim=-1) # (B, V-1, 17, 3)
-        other_summary = other_summary.view(B, V_minus_1, -1) # (B, V-1, 51)
-        
-        pair_features = torch.cat([ego_summary, other_summary], dim=-1) # (B, V-1, 102)
-        scores = self.scorer(pair_features).squeeze(-1) # (B, V-1)
-        return scores
-
-class HeatmapCrossAttention(nn.Module):
-    def __init__(self, channels=17, embed_dim=64):
-        super().__init__()
-        # 在 heatmap 上做 attention。因為 channel 只有 17，我們用 1x1 conv 升維做投影
-        self.query_proj = nn.Conv2d(channels, embed_dim, 1)
-        self.key_proj = nn.Conv2d(channels, embed_dim, 1)
-        self.value_proj = nn.Conv2d(channels, channels, 1)
-        self.scale = math.sqrt(embed_dim)
-        
-        # 通訊殘差權重，初始化為很小的值
-        self.alpha = nn.Parameter(torch.tensor(0.01))
-        
-    def forward(self, ego_hm, other_hm):
-        """
-        ego_hm: (B, 17, 64, 64)
-        other_hm: (B, 17, 64, 64)
-        沒有相機參數時的一般 Cross-Attention (簡化版 Epipolar，讓模型自己學對應關係)
-        """
-        B, C, H, W = ego_hm.shape
-        
-        # (B, embed, H*W)
-        Q = self.query_proj(ego_hm).view(B, -1, H*W)
-        K = self.key_proj(other_hm).view(B, -1, H*W)
-        V = self.value_proj(other_hm).view(B, -1, H*W)
-        
-        # Attention Map: (B, H*W, H*W)
-        attn = torch.bmm(Q.transpose(1, 2), K) / self.scale
-        attn = F.softmax(attn, dim=-1)
-        
-        # Output: (B, channels, H*W) -> (B, channels, H, W)
-        out = torch.bmm(V, attn.transpose(1, 2))
-        out = out.view(B, C, H, W)
-        
-        # 殘差融合
-        fused_hm = ego_hm + self.alpha * out
-        return fused_hm
+    def forward(self, coords, conf):
+        # coords: (B, V, 17, 2), conf: (B, V, 17)
+        B, V = coords.shape[0], coords.shape[1]
+        summary = torch.cat([coords, conf.unsqueeze(-1)], dim=-1) # (B, V, 17, 3)
+        summary = summary.view(B, V, -1) # (B, V, 51)
+        scores = self.scorer(summary).squeeze(-1) # (B, V)
+        weights = F.softmax(scores, dim=-1) # (B, V)
+        return weights
 
 class When2comHeatmapNet(nn.Module):
     def __init__(self, num_joints=17):
@@ -178,8 +131,7 @@ class When2comHeatmapNet(nn.Module):
         self.decoder = HeatmapDecoder(num_joints=num_joints)
         
         self.gate = EntropyGate(num_joints=num_joints)
-        self.matchmaker = CompressedMatchmaker(num_joints=num_joints)
-        self.fusion = HeatmapCrossAttention(channels=num_joints)
+        self.view_weighter = SoftmaxViewWeighter(num_joints=num_joints)
         
     def forward(self, images, force_comm=False, force_no_comm=False, temperature=1.0):
         """
@@ -194,16 +146,18 @@ class When2comHeatmapNet(nn.Module):
         
         hms = hms_flat.view(B, V, self.num_joints, 64, 64)
         ego_hm = hms[:, 0]
-        other_hms = hms[:, 1:]
         
         # 2. 提取壓縮摘要 (座標和信心)
-        ego_coords = soft_argmax_2d(ego_hm)
-        ego_conf = get_confidence(ego_hm)
+        all_coords = soft_argmax_2d(hms.contiguous().view(-1, self.num_joints, 64, 64)).view(B, V, self.num_joints, 2)
+        all_conf = get_confidence(hms.contiguous().view(-1, self.num_joints, 64, 64)).view(B, V, self.num_joints)
         
-        other_coords = soft_argmax_2d(other_hms.contiguous().view(-1, self.num_joints, 64, 64)).view(B, V-1, self.num_joints, 2)
-        other_conf = get_confidence(other_hms.contiguous().view(-1, self.num_joints, 64, 64)).view(B, V-1, self.num_joints)
+        # 3. Softmax 視角加權
+        weights = self.view_weighter(all_coords, all_conf) # (B, V)
         
-        # 3. Gate 決策
+        # 加權融合 Heatmap
+        fused_hm = (hms * weights.view(B, V, 1, 1, 1)).sum(dim=1) # (B, 17, 64, 64)
+        
+        # 4. Gate 決策
         comm_prob = self.gate(ego_hm) # (B, 1)
         
         if force_comm:
@@ -211,28 +165,12 @@ class When2comHeatmapNet(nn.Module):
         elif force_no_comm:
             gate_mask = torch.zeros_like(comm_prob)
         else:
-            # Inference mode: 用 0.5 切割
-            gate_mask = (comm_prob > 0.5).float()
+            # Inference mode: 使用平滑的 Gate 混合
+            gate_mask = comm_prob
             
-        # 4. 只有在需要通訊時才做 Matchmaker 和 Fusion
-        final_hm = ego_hm.clone()
-        
-        if gate_mask.sum() > 0:
-            # 打分數
-            scores = self.matchmaker(ego_coords, ego_conf, other_coords, other_conf) # (B, V-1)
-            # Gumbel Softmax 選擇隊友
-            weights = F.gumbel_softmax(scores, tau=temperature, hard=True, dim=-1) # (B, V-1)
-            
-            # 選出最佳隊友的 heatmap
-            # (B, V-1, 1, 1, 1) * (B, V-1, 17, 64, 64)
-            selected_hm = (other_hms * weights.view(B, V-1, 1, 1, 1)).sum(dim=1) 
-            
-            # 融合
-            fused_hm = self.fusion(ego_hm, selected_hm)
-            
-            # 根據 gate_mask 混合
-            gate_mask_hm = gate_mask.view(B, 1, 1, 1)
-            final_hm = gate_mask_hm * fused_hm + (1 - gate_mask_hm) * ego_hm
+        # 根據 gate_mask 混合 (方案二核心)
+        gate_mask_hm = gate_mask.view(B, 1, 1, 1)
+        final_hm = gate_mask_hm * fused_hm + (1 - gate_mask_hm) * ego_hm
             
         # 5. 最終預測
         pred_coords = soft_argmax_2d(final_hm)

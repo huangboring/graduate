@@ -72,8 +72,7 @@ def train_stage1(model, loader, optimizer, epochs=60, device='cuda', save_dir='.
             pbar.set_postfix({
                 'loss': f"{loss.item():.4f}",
                 'hm': f"{hm_loss.item()*1000:.4f}",
-                'coord': f"{coord_loss.item()*10:.4f}",
-                'alpha': f"{model.fusion.alpha.item():.4f}"
+                'coord': f"{coord_loss.item()*10:.4f}"
             })
             
         avg_loss = total_loss/len(loader)
@@ -84,7 +83,7 @@ def train_stage1(model, loader, optimizer, epochs=60, device='cuda', save_dir='.
         epoch_hm_losses.append(avg_hm)
         epoch_coord_losses.append(avg_coord)
         
-        print(f"Epoch {epoch+1} Avg Loss: {avg_loss:.4f} | Alpha: {model.fusion.alpha.item():.4f}")
+        print(f"Epoch {epoch+1} Avg Loss: {avg_loss:.4f}")
         torch.save(model.state_dict(), os.path.join(save_dir, "heatmap_stage1_latest.pth"))
         
     # === 繪製 Stage 1 圖表 ===
@@ -162,12 +161,12 @@ def train_stage2(model, loader, optimizer, epochs=20, device='cuda', save_dir='.
                 pred_hm_no_comm = ego_hm
                 loss_no_comm = criterion_hm(pred_hm_no_comm * vis_mask, gt_ego_hm * vis_mask).view(B, -1).mean(dim=1)
                 
-                # 通訊 (最佳隊友)
-                ego_coords = soft_argmax_2d(ego_hm)
-                ego_conf = get_confidence(ego_hm)
-                # ... 省略 matchmaker 呼叫，為簡化直接取平均隊友當成通訊結果
-                selected_hm = other_hms.mean(dim=1) 
-                pred_hm_comm = model.fusion(ego_hm, selected_hm)
+                # 計算通訊 (全視角 Softmax 軟融合)
+                all_coords = soft_argmax_2d(all_hms.contiguous().view(-1, 17, 64, 64)).view(B, V, 17, 2)
+                all_conf = get_confidence(all_hms.contiguous().view(-1, 17, 64, 64)).view(B, V, 17)
+                weights = model.view_weighter(all_coords, all_conf)
+                pred_hm_comm = (all_hms * weights.view(B, V, 1, 1, 1)).sum(dim=1)
+                
                 loss_comm = criterion_hm(pred_hm_comm * vis_mask, gt_ego_hm * vis_mask).view(B, -1).mean(dim=1)
                 
                 # 產生 per-sample 的 GT 標籤 (通訊的 loss 比較小就標 1)
@@ -250,7 +249,7 @@ if __name__ == "__main__":
     # =============== Stage 2 ===============
     print("\n--- 啟動 Stage 2 (Entropy Gate) ---")
     # 載入 Stage 1 權重
-    model.load_state_dict(torch.load("heatmap_stage1_latest.pth"))
+    model.load_state_dict(torch.load("heatmap_stage1_latest.pth", weights_only=True))
     
     # 凍結所有，只開 Gate
     for param in model.parameters():
