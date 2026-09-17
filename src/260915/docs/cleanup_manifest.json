@@ -1,0 +1,365 @@
+{
+  "deleted_files": [
+    {
+      "path": "configs/panoptic/generalization/CMU0ex3.yaml",
+      "bytes": 3037,
+      "sha256": "1588CFFA15E1D7D74DC4B7DCDDE971E0BF608098185ECF58F574E0E818479211"
+    },
+    {
+      "path": "configs/panoptic/generalization/CMU0ex4.yaml",
+      "bytes": 3037,
+      "sha256": "E436BC8AAF9E21B316A6E7CA7204FC48DF483B1D42740E3C41985251A338B356"
+    },
+    {
+      "path": "configs/panoptic/generalization/CMU0ex6.yaml",
+      "bytes": 3037,
+      "sha256": "D4C365D43E4804123F9B08F5B5D07718C76E7C551492AC964290756A59EC9B84"
+    },
+    {
+      "path": "configs/panoptic/generalization/CMU0ex7.yaml",
+      "bytes": 3037,
+      "sha256": "C7E32A0ABDB09CFC8FBB5FEEED15832D828D883A055480CB32587D8C960084F3"
+    },
+    {
+      "path": "configs/panoptic/generalization/CMU1.yaml",
+      "bytes": 3035,
+      "sha256": "BA2A3A091C1170C09CEB13B795E984000C8473FA0DA4A6536853C39217E4B384"
+    },
+    {
+      "path": "configs/panoptic/generalization/CMU2.yaml",
+      "bytes": 3035,
+      "sha256": "A5AD47416054F08251B21CA2AA47630148C74F7D338A7AB0D98B9B406A2CF4FC"
+    },
+    {
+      "path": "configs/panoptic/generalization/CMU3.yaml",
+      "bytes": 3035,
+      "sha256": "03C9735DFBD3DA2128F6517E065D3A142711B3D24B616B491E01E3B71E1C350C"
+    },
+    {
+      "path": "configs/panoptic/generalization/CMU4.yaml",
+      "bytes": 3036,
+      "sha256": "C4FA1D23054F7081DF5B11B619E6C845B39217FC85F41FB3FADF0242AD15F099"
+    },
+    {
+      "path": "configs/panoptic/knn5-lr4-q1024-g8.yaml",
+      "bytes": 3125,
+      "sha256": "D1F0DD86E3DE93F23861EAF5745F4D16B6E2EF0B3B13DB755B3E4DD22906F817"
+    },
+    {
+      "path": "configs/shelf_campus/campus_knn5-lr4-q1024.yaml",
+      "bytes": 3356,
+      "sha256": "6BD80CEEED82D18E0A9F1145002FB96CEE0A936C195E14E8C252639324DC927B"
+    },
+    {
+      "path": "configs/shelf_campus/shelf_knn5-lr4-q1024.yaml",
+      "bytes": 3360,
+      "sha256": "E421D68CDCCC65ABFE1CCB40EBBCCA5BB569EB9F0290E3B6DB2A454AD9E40546"
+    },
+    {
+      "path": "data/CampusSeq1/calibration_campus.json",
+      "bytes": 2469,
+      "sha256": "E5CF6DABC4773381FEB2EADB934F50A3F3FA356C4245281AD509D08C289649C6"
+    },
+    {
+      "path": "data/Shelf/calibration_shelf.json",
+      "bytes": 3545,
+      "sha256": "E485060D3D5306B32FE0F3EFCA622B100C27E3303856A72752BA14AE31BA494F"
+    },
+    {
+      "path": "docs/CMU_sequences.md",
+      "bytes": 996,
+      "sha256": "032E2633031EBD95160D14384B5C57368C0947B0E48EBCED40F3DAFB8AFDCA22"
+    },
+    {
+      "path": "docs/detail_install.md",
+      "bytes": 2892,
+      "sha256": "E96A67E32921B3FE7E71C8E2A7CB99B3C2B20A16585EBF65E58D0DA838690CE9"
+    },
+    {
+      "path": "figures/cmu_demo.gif",
+      "bytes": 16171958,
+      "sha256": "1A5935246DE2FB2A16874566AE818250A63CB9E2E8681654B934E1339B6F117B"
+    },
+    {
+      "path": "figures/Framework.png",
+      "bytes": 245379,
+      "sha256": "8B90AF9A7BA7C237316362CD7B21F2D5C13C5E1EB5682275E8E803A818D5BB9D"
+    },
+    {
+      "path": "figures/iterative_result.png",
+      "bytes": 1100540,
+      "sha256": "B63485D278F34B9A9BD1EF6FF49460E3931CCFC2D0F1BFC655EB11338458A766"
+    },
+    {
+      "path": "lib/core/function.py",
+      "bytes": 30768,
+      "sha256": "B7D929AFFEF7A4FF04DEF5D0C0E06622AEDF513A35C5EE0118D61038F2B0DFFA"
+    },
+    {
+      "path": "lib/core/nms.py",
+      "bytes": 8596,
+      "sha256": "DD8FB0FB5C348AE71F8A976091E74FA59225E9BFAA59C63A095F6072FA86B0B4"
+    },
+    {
+      "path": "lib/dataset/__init__.py",
+      "bytes": 900,
+      "sha256": "EA011EB1FE39F053A8E1E0E8AEEF7D215D6568F4ACF40F02F2DA0E0BA78EEF12"
+    },
+    {
+      "path": "lib/dataset/campus.py",
+      "bytes": 13690,
+      "sha256": "97A46F3BB9429BE0B6244AA91072EE62EC1D1C13F8EC900563CB2BC19BD47229"
+    },
+    {
+      "path": "lib/dataset/h36m.py",
+      "bytes": 12173,
+      "sha256": "45A68EE01BE666246502F2881423F099098EE46F85A1900A49C214B4CE626E09"
+    },
+    {
+      "path": "lib/dataset/JointsDataset.py",
+      "bytes": 18038,
+      "sha256": "1CD17632A086C57C28A6193FA2ACDDA43205D82663262E2394D748EDD2B4EAE4"
+    },
+    {
+      "path": "lib/dataset/panoptic.py",
+      "bytes": 30995,
+      "sha256": "ECBD4791CD283A8C9E6D6B3163948C131DBF96721DB622FAB027885D4BEAC78E"
+    },
+    {
+      "path": "lib/dataset/samplers.py",
+      "bytes": 6356,
+      "sha256": "3CA860999DDF981C590FBE7C8CBC7588BB055244AC4825A923D374AB927F9B39"
+    },
+    {
+      "path": "lib/dataset/shelf.py",
+      "bytes": 13927,
+      "sha256": "AE78A8975B0640112371715BA062D587E3FB6D378214587761CB4707EDEC8540"
+    },
+    {
+      "path": "lib/models/util/box_ops.py",
+      "bytes": 3130,
+      "sha256": "D175EBD824FEEF527C22A111FA701E3A350956DB510A12E3CB58ADE38D58C90E"
+    },
+    {
+      "path": "lib/models/util/plot_utils.py",
+      "bytes": 5009,
+      "sha256": "DEE6F46BD9912AA32F51C5C214759F39B5413435CD8159FBCE685F3FD42C9E3D"
+    },
+    {
+      "path": "lib/mvn/datasets/__init__.py",
+      "bytes": 40,
+      "sha256": "C78AA7AAC8E721A503869484C9C5F542FB40A19F346FB0C08F0DFE0A7C867BF9"
+    },
+    {
+      "path": "lib/mvn/datasets/human36m_preprocessing/action_to_bbox_filename.py",
+      "bytes": 5283,
+      "sha256": "09A8DB80FD4DF72FCD1BA96A223448D5C82B9950DCE0E2AE61BFC18A601A1DF8"
+    },
+    {
+      "path": "lib/mvn/datasets/human36m_preprocessing/action_to_una_dinosauria.py",
+      "bytes": 5350,
+      "sha256": "3AE61FA45EF3E0738E57C35406EE75CBD6B28806F1BE42499A7769699A21CDAA"
+    },
+    {
+      "path": "lib/mvn/datasets/human36m_preprocessing/collect-bboxes.py",
+      "bytes": 3880,
+      "sha256": "2900C04D9F77784DE038898C708B35889930663978E8E77318E5EC5DD43093C0"
+    },
+    {
+      "path": "lib/mvn/datasets/human36m_preprocessing/generate-labels-npy-multiview.py",
+      "bytes": 8581,
+      "sha256": "EF5394EECDC2CD3E5C96A431E455EFDF4B5245AAD7C8E1741BDC021752EDCDB0"
+    },
+    {
+      "path": "lib/mvn/datasets/human36m_preprocessing/README.md",
+      "bytes": 4186,
+      "sha256": "0C00BC45543E6333E1AF836BCB5F715B3560F2948D73EF9B11ED5A49E21AF59A"
+    },
+    {
+      "path": "lib/mvn/datasets/human36m_preprocessing/undistort-h36m.py",
+      "bytes": 4986,
+      "sha256": "CD457FAA40E5949CF2B9E6C00F42518B09AD4196C7B1C16FE5EBA8DADF524E8E"
+    },
+    {
+      "path": "lib/mvn/datasets/human36m_preprocessing/view-dataset.py",
+      "bytes": 2718,
+      "sha256": "35F6043E88E2A3DDEDD9B82778506AEC91B664A9FCE389DA73D2E206F255F92A"
+    },
+    {
+      "path": "lib/mvn/datasets/human36m.py",
+      "bytes": 12417,
+      "sha256": "E10DE5EC62D1FB71D916C39B113E08176C37BB7A6C32D53FFFC40F39381867D7"
+    },
+    {
+      "path": "lib/mvn/datasets/utils.py",
+      "bytes": 2680,
+      "sha256": "7AFAB82DB64506F22B9EB905128B17D0CA413B287E01C4CE8421F2E0C343B798"
+    },
+    {
+      "path": "lib/mvn/models/__init__.py",
+      "bytes": 40,
+      "sha256": "C78AA7AAC8E721A503869484C9C5F542FB40A19F346FB0C08F0DFE0A7C867BF9"
+    },
+    {
+      "path": "lib/mvn/models/loss.py",
+      "bytes": 3147,
+      "sha256": "9CFBDACF891DD6DD514660465334B28730CD9CD0E7E64C5727E3C69D03093E9D"
+    },
+    {
+      "path": "lib/mvn/models/pose_resnet.py",
+      "bytes": 13075,
+      "sha256": "CE295DEAABC856700E32A20F7A8DC077234CAA87CAD2F87BDEA9E6ECFD603D1E"
+    },
+    {
+      "path": "lib/mvn/models/triangulation.py",
+      "bytes": 15827,
+      "sha256": "61A1A3C8E5599254E0EAA22614D7683F325FBC7F6DCD6D7FF096FC652A3E981F"
+    },
+    {
+      "path": "lib/mvn/models/v2v.py",
+      "bytes": 6072,
+      "sha256": "ED1C1FE66E4639CD46AAD52D84567EA8671C6099A1110FC251200DED7BD55FF9"
+    },
+    {
+      "path": "lib/mvn/utils/cfg.py",
+      "bytes": 176,
+      "sha256": "E0BD608E8CB9FD310B52B823D121BB8DE330B919C7FFE56318FF003A300DE978"
+    },
+    {
+      "path": "lib/mvn/utils/misc.py",
+      "bytes": 863,
+      "sha256": "8A37312EE271D92F0CDAA730EF672B659890620CC76FD8175DF039462C856D62"
+    },
+    {
+      "path": "lib/mvn/utils/vis.py",
+      "bytes": 16724,
+      "sha256": "819A99C601EA0D4CD4BB424018D1ADDFCA23408BC5F3796CA1183363C64C6F28"
+    },
+    {
+      "path": "lib/mvn/utils/volumetric.py",
+      "bytes": 4306,
+      "sha256": "FB07BB6C8FCECF0A22699FA8F4805D1456F409628C41BC257AD84E8554F3F473"
+    },
+    {
+      "path": "lib/smpl/prior.py",
+      "bytes": 9393,
+      "sha256": "7F04BF353025DB2C9D4B0CF433AAECA91FDF89A23C2EFA3B16A9860DEE3A01A4"
+    },
+    {
+      "path": "lib/smpl/renderer.py",
+      "bytes": 4389,
+      "sha256": "137FBDC0CC882D30912B2CD9D807D644365372C37DC48AB2802D1DDCFA359167"
+    },
+    {
+      "path": "lib/smpl/smpl_common.py",
+      "bytes": 8518,
+      "sha256": "10E63E720D2654E09DCB77C7816BEEE1277C2F63BCB8B4221739EE6F9352D45B"
+    },
+    {
+      "path": "lib/smpl/smpl.py",
+      "bytes": 4027,
+      "sha256": "F545C184531448E4B8685848DA25A8D61536756CB0098D4F5A2648BA6315733B"
+    },
+    {
+      "path": "lib/smpl/umeyama.py",
+      "bytes": 5203,
+      "sha256": "B4AEB40711931C0E01A609D1C3A4CD32CA1AE4D828786EF1CB2ECD2471107F0E"
+    },
+    {
+      "path": "lib/smpl/utils.py",
+      "bytes": 10110,
+      "sha256": "81C5615BDC6E64E80D654765A043907385EC0B4B80B713EF89DA0742586F5648"
+    },
+    {
+      "path": "lib/utils/cameras_cpu.py",
+      "bytes": 2941,
+      "sha256": "FB5D1D3EA051904C117F4AD013B58DB2E5391C8FD10EAC9E094DA3E9A88F30E5"
+    },
+    {
+      "path": "lib/utils/cameras_cuda_col.py",
+      "bytes": 6219,
+      "sha256": "89F1D0CB31DD2249EEAF462AC59AD598438B8ED50CF4E213CC558F5BF03E24BF"
+    },
+    {
+      "path": "lib/utils/misc.py",
+      "bytes": 15113,
+      "sha256": "087A6ECD4551E8791DD6DEA92E494774D11379FF4F60AA53018351D18D2C0EC8"
+    },
+    {
+      "path": "lib/utils/plot_curves.py",
+      "bytes": 2298,
+      "sha256": "7A6FEAAC4CC73ACDB69B9FFF474C4DF9BEA4C5E5EDB97122C0348AA256F8969B"
+    },
+    {
+      "path": "lib/utils/utils.py",
+      "bytes": 7190,
+      "sha256": "9E637D577B460E7BA26B15215E49A5ADF053A332175D320F32E315F4AFE5B2BF"
+    },
+    {
+      "path": "lib/utils/vis_layerwise.py",
+      "bytes": 8572,
+      "sha256": "44F8C34073224A28E82D02CF3E30654BE67590904251A56C9C93139553592F76"
+    },
+    {
+      "path": "lib/utils/vis_per_view.py",
+      "bytes": 6993,
+      "sha256": "B89FB5A5824A0E2807A51E8B86103C22F8590BE73C8838AADCE8F773F4153FF9"
+    },
+    {
+      "path": "lib/utils/zipreader.py",
+      "bytes": 2716,
+      "sha256": "8304727A406B4ACECEDFF899B0EA11C06E69D2B1E603052E03C2EC9C430DFCB3"
+    },
+    {
+      "path": "process/_init_paths.py",
+      "bytes": 1213,
+      "sha256": "84BF7F55596C7BF35F2AE74FE30EC297A6E3397CC44737541BD73E672E6387B4"
+    },
+    {
+      "path": "process/analyze_query.py",
+      "bytes": 1954,
+      "sha256": "6A78D189101436B412FAEE0CDF6A23A34507D980FD3761A324F7B34E05E2FA86"
+    },
+    {
+      "path": "process/extract_dataset.py",
+      "bytes": 21394,
+      "sha256": "5273BE75581FC1033998A027508618E5974838168A365C953DE5D77BBA0AD791"
+    },
+    {
+      "path": "process/extract_number.py",
+      "bytes": 3006,
+      "sha256": "E86D373207497A5EEF1356F7D987AD0C0229507AC686FF7028AEFBE9A70BB632"
+    },
+    {
+      "path": "run/_init_paths.py",
+      "bytes": 1270,
+      "sha256": "52B97CFCE227B9902A32684D595075B019FB75EAF263FE5DAF2D5801196AA446"
+    },
+    {
+      "path": "run/generate_video.py",
+      "bytes": 2316,
+      "sha256": "76CB597EED3AE1E86EFCA1DD395E2BF4A03E74C6085A3C16A441C388F0488E71"
+    },
+    {
+      "path": "run/toy_torch_svd.py",
+      "bytes": 1459,
+      "sha256": "77C1ED98F27B2BDC7FAD98A716CC21BC4841D042B37B3F799DE99AF835BB7E6F"
+    },
+    {
+      "path": "run/train_3d.py",
+      "bytes": 19365,
+      "sha256": "AD59B64084F0047B7F870F7314E5FD6ABD13FED387CE89E709317D959F5EBE5C"
+    },
+    {
+      "path": "run/validate_3d.py",
+      "bytes": 12089,
+      "sha256": "F11DE7877CD346B520AB3D3BF2E8C1D95EFFD72A14D1EEF66711173FACC99B74"
+    },
+    {
+      "path": "scripts/getData_val_CMU0.sh",
+      "bytes": 6357,
+      "sha256": "A3D722A757EC3C31B82E972D33227EE31A32D8B5A9713A0DB99790E22E208F25"
+    }
+  ],
+  "verified_archive": "C:\\碩論\\mvp_backups\\260915_before_cleanup_20260916_004219.zip"
+}

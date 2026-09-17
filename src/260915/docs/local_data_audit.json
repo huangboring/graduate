@@ -1,0 +1,42 @@
+{
+  "data_root": "C:\\碩論\\data\\panoptic-toolbox-master\\data",
+  "sequences": [
+    {
+      "sequence": "160422_ultimatum1",
+      "path": "C:\\碩論\\data\\panoptic-toolbox-master\\data\\160422_ultimatum1",
+      "calibration_hd_count": 31,
+      "videos": [
+        {
+          "camera": "00_00",
+          "path": "C:\\碩論\\data\\panoptic-toolbox-master\\data\\160422_ultimatum1\\hdVideos\\hd_00_00.mp4",
+          "bytes": 533543598,
+          "calibrated": true,
+          "opened": true,
+          "frames": 27170,
+          "fps": 29.97002997002997,
+          "resolution": [
+            1920,
+            1080
+          ],
+          "annotations_in_video_range": 26794
+        }
+      ],
+      "images": [],
+      "annotation_source": "tar_only",
+      "annotation_count": 26794,
+      "first_annotation": 173,
+      "last_annotation": 26966,
+      "frames_with_people": 24181,
+      "first_people_frame": 266,
+      "first_usable_root_frame": 268,
+      "max_people": 7,
+      "annotation_errors": [],
+      "warnings": [
+        "3D annotations exist only in TAR; unpack before training",
+        "Fewer than 3 available cameras: cannot train a nontrivial K>=2 selector"
+      ],
+      "alignment": "Filename/range checks only; extraction start_number, dropped frames and visual reprojection still need verification"
+    }
+  ],
+  "scope": "Observed files on this computer only; does not establish contents of another computer"
+}

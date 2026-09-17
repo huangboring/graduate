@@ -1,201 +1,64 @@
-# MVGFormer: Multiple View Geometry Transformers for 3D Human Pose Estimation
-### CVPR'24 [[Paper](https://arxiv.org/abs/2311.10983)] [[Poster](https://drive.google.com/file/d/1VZvKvuO3EuBBJs29mJ1uMlh4iAupSHT3/view?usp=sharing)] 
+# 多視角 3D 姿態估計 MVP（260915）
 
-This is the official implementation of our work presented at CVPR 2024, titled ***Multiple View Geometry Transformers for 3D Human Pose Estimation***.
+以預訓練 MVGFormer 為姿態模型，訓練 decoder 前的輕量視角選擇器。
+訓練支援 Panoptic 同步 MP4、舊版 hdVideos/hd_00_XX/*.jpg 與官方 hdImgs；影像需保留原始 HD 影格編號。
 
-<!-- ![demo](./figures/cmu_dmeo.gif) -->
-<img src="./figures/cmu_demo.gif" width="800"/>
+搬到另一台電腦前請先看 [舊資料處理與搬機核對](docs/DATA_HANDOFF.md)，並執行 `run/audit_data.py`。
 
-# Framework
+## 先修改設定，再一條指令訓練
 
-We **explicitly introduce multi-view geometric modules** into an end-to-end Transformers architecture for 3D human pose estimation, resulting in remarkable generalization performance across various camera settings.
+編輯 `configs/train_mvp.json` 的資料根目錄、完整姿態權重、訓練／驗證序列。
+相機欄位 `cameras: null` 會自動找到各序列現有視角。
 
-![framework](./figures/Framework.png)
-
-
-## Iterative Query Updates with Transformers
-
-We employ a coarse-to-fine query refinement process, initially randomly sampling coarse 3D queries in the areas. Subsequently, we project these coarse 3D poses onto 2D images and aggregate features using Transformer attentions to update the projected points. Finally, we use triangulation to recover more accurate 3D poses. This process is iteratively repeated in an end-to-end differentiable manner by Transformer decoder layers.
-
-![iterative_result](./figures/iterative_result.png)
-
-## Reference
-```
-@inproceedings{liao2024multiple,
-  title={Multiple View Geometry Transformers for 3D Human Pose Estimation},
-  author={Liao, Ziwei and Zhu, Jialiang and Wang, Chunyu and Hu, Han and Waslander, Steven L},
-  booktitle={Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition},
-  pages={708--717},
-  year={2024}
-}
+```powershell
+python run/train_mvp.py
 ```
 
-# Update Logs
+流程：環境／資料檢查 → 固定 MVGFormer 產生組合品質標籤 → 訓練選擇器 → 驗證 → 匯出模型包 → 實際執行短版 demo。
+這不是從零訓練 MVGFormer，也不是兩個模型端到端聯合訓練；姿態模型保持預訓練權重。
 
-[Mar 23, 2025] Updated the support for inference on the Shelf and Campus datasets.
-
-# 1. Installation
-
-
-Clone the repository:
-
-```
-git clone git@github.com:XunshanMan/MVGFormer.git
+```powershell
+python run/train_mvp.py --check
+python run/train_mvp.py --resume
 ```
 
-## Dependencies
+`--resume` 重用通過資料、程式、設定、權重比對的教師標籤快取，重新訓練小型選擇器；不是還原 optimizer 的精確中斷續訓。
 
-Create a conda environment:
+## 使用訓練輸出做 demo
 
-```
-conda create -n mvgformer python==3.10
-conda activate mvgformer
-```
-
-Install [mmcv](https://mmcv.readthedocs.io/en/latest/get_started/installation.html) carefully with cuda version:
-```
-pip install -U openmim
-mim install mmcv-full
+```powershell
+python run/demo_mvp.py --bundle output/mvp_training/bundle/bundle.json --sequence "D:/data/panoptic/160906_pizza1"
 ```
 
-Install the dependencies:
-```
-pip install -r requirements.txt
-```
+若驗證結果無法支持學習式選擇优於固定 K，模型包預設採固定 K，並在報告說明。
+加上 `--policy learned` 可明確比較學習式策略，`--policy all` 可比較全部視角。
+`--headless` 關閉視窗；`--k` 可指定保留視角數（至少 2）。
 
-Compile the attention modules. Please carefully set your ```CUDA_HOME=/usr/local/cuda-*/```, where ```*``` is your cuda version:
+## 驗證狀態
 
-```
-cd ./lib/models/ops
-CUDA_HOME=/usr/local/cuda-11.0/ python setup.py build install
-```
+本機缺少 CUDA 推論環境與實際 Panoptic 訓練資料、完整權重。
+已執行 CPU 單元／整合測試；不能因此宣稱已完成真實資料訓練、達到某精度或即時速度。
 
-## Dataset Prepararation
-
-Consider the project root directory as ```${POSE_ROOT}```.
-
-**CMU Panoptic dataset**. Please download the CMU Panoptic Dataset following [VoxelPose](https://github.com/microsoft/voxelpose-pytorch) as below:
-
-* [Update: Mar 23, 2025] More detailed guidance is available [here](docs/detail_install.md), along with a convenient script to download the sequences. 
-
-* Download the dataset by following the instructions in [panoptic-toolbox](https://github.com/CMU-Perceptual-Computing-Lab/panoptic-toolbox) and extract them under ```${POSE_ROOT}/data/panoptic/```
-
-* You can only download those sequences you need. You can also just download a subset of camera views by specifying the number of views (HD_Video_Number) and changing the camera order in ```./scripts/getData.sh```. The sequences and camera views used in our project can be obtained from [here](docs/CMU_sequences.md), and the ```Table A.1``` in the Supplementary Materials of [our paper](https://arxiv.org/pdf/2311.10983#page=11.29). 
-
-* Note that we only use HD videos, calibration data, and 3D Body Keypoint in the codes. You can comment out other irrelevant codes such as downloading 3D Face data in ```./scripts/getData.sh```.
-
-**Feature Backbone**. Please download the [PoseResNet-50 pre-trained model](https://onedrive.live.com/?authkey=%21AMf08ZItxtILRuU&id=93774C670BD4F835%211917&cid=93774C670BD4F835&parId=root&parQt=sharedby&o=OneUp) and place it at ```${POSE_ROOT}/models/pose_resnet50_panoptic.pth.tar``` (ResNet-50 pretrained on COCO dataset and finetuned jointly on Panoptic dataset and MPII).
-
-The structure should look like this:
-
-```
-${POSE_ROOT}
-|-- models
-|   |-- pose_resnet50_panoptic.pth.tar
-|-- data
-    |-- panoptic
-        |-- 16060224_haggling1
-        |   |-- hdImgs
-        |   |-- hdvideos
-        |   |-- hdPose3d_stage1_coco19
-        |   |-- calibration_160224_haggling1.json
-        |-- 160226_haggling1  
-        |-- ...
+```powershell
+python -m unittest discover -s tests -v
 ```
 
-**Shelf/Campus Dataset**. Please follow [VoxelPose](https://github.com/microsoft/voxelpose-pytorch) to download 
-the Shelf/Campus Dataset. 
+詳細環境、資料量建議、成本定義、評估與 webcam 後續步驟：[MVP.md](docs/MVP.md)。
 
-The structure should look like this:
+## 精簡後目錄
 
-```
-${POSE_ROOT}
-|-- models
-|   |-- pose_resnet50_panoptic.pth.tar
-|-- data
-    |-- CampusSeq1
-        |-- Camera0
-        |   |-- *.png
-        |-- calibration_campus.json
-        |-- ...
-    |-- Shelf
-```
+- `run/train_mvp.py`：一條指令訓練與匯出。
+- `run/demo_mvp.py`：影片串流推論與顯示。
+- `lib/mvp_demo/`：選擇、訓練、校正、影片與通訊成本。
+- `lib/models/`、`lib/core/`、`lib/mvn/`、`lib/structural/`、`lib/utils/`：MVGFormer 實際依賴；部分上游類別仍需保留以載入原 checkpoint。
+- `configs/`：一份姿態模型設定、一份訓練設定。
+- `tests/`：CPU 測試。
+- `tpose.pt`：初始化必要的小型姿態範本，已取消 Git 忽略。
+- `docs/cleanup_manifest.json`：刪除檔案清單與可還原備份位置。
 
-# 2. Training
+## 來源與授權
 
-## 2.1 CMU Panoptic dataset
-
-We train on five camera views from the camera arrangement of ```CMU0```. We trained our models on 8 GPUs and batch_size=1 for each GPU. The evaluation result will be printed after every epoch, the best result can be found in the log.
-
-```
-python -m torch.distributed.launch --nproc_per_node=8 --use_env run/train_3d.py --cfg configs/panoptic/knn5-lr4-q1024-g8.yaml
-```
-
-### Model Checkpoints
-
-The trained model checkpoints can be downloaded as below. Please put the weights under ```models/```.
-
-| Datasets    |  AP<sub>25</sub> |  MPJPE | pth | 
-| :---        |   :---:    |   :---:  | :---:  |
-| Panoptic    |    92.3    |  16.0   | [here](https://drive.google.com/file/d/1iPLyUzatBtm7iIoWoErgRXn7sS2OMTxC/view?usp=sharing) |
-
-## 2.2 Ablation Experiments
-
-Following Section 2.1, please change the parameters in the config file, or pass through extra parameters, such as ```DECODER.num_decoder_layers=4```, ```DECODER.num_instance=1024```, ```TRAIN.END_EPOCH=100``` to run the ablation experiments.
-
-# 3. Evaluation
-
-## 3.1 Generalization (Out-of-domain) Evaluation
-
-We train our model on the CMU panoptic dataset, with the camera arrangement of ```CMU0```. We can infer the model on several out-of-domain settings, including ```Change Camera Numbers```, ```Change Camera Arrangements```, and ```Change Dataset without finetuning```. 
-
-For CMU-panoptic dataset, you can find ready-made configuration files below `configs/panoptic/generalization`. ```EXP_TYPE``` can be ```CMU0ex3,CMU0ex4,CMU0ex6,CMU0ex7,CMU1,CMU2,CMU3,CMU4```.
-
-```
-python run/validate_3d.py --cfg configs/panoptic/generalization/{EXP_TYPE}.yaml --model_path models/mvgformer_q1024_model.pth.tar
-```
-
-You can also configure experiments with extra parameters:
-
-* ```Change Camera Numbers```. The camera number can be ```3,4,5,6,7```:
-
-```
-python run/validate_3d.py --cfg configs/panoptic/knn5-lr4-q1024.yaml --model_path models/mvgformer_q1024_model.pth.tar DATASET.TEST_CAM_SEQ='CMU0ex' DATASET.CAMERA_NUM=7
-```
-
-* ```Change Camera Arrangements```. The camera arrangements can be ```CMU0,CMU1,CMU2,CMU3,CMU4```. Please see [here](docs/CMU_sequences.md) for the detail of each arrangements:
-
-```
-python run/validate_3d.py --cfg configs/panoptic/knn5-lr4-q1024.yaml --model_path models/mvgformer_q1024_model.pth.tar DATASET.TEST_CAM_SEQ=CMU1
-```
-
-* ```Change Dataset without finetuning```. Shelf and Campus:
-```
-python run/validate_3d.py --cfg configs/shelf_campus/campus_knn5-lr4-q1024.yaml --model_path models/mvgformer_q1024_model.pth.tar --dataset Campus
-python run/validate_3d.py --cfg configs/shelf_campus/shelf_knn5-lr4-q1024.yaml --model_path models/mvgformer_q1024_model.pth.tar --dataset Shelf
-```
-
-## 3.2 In-domain Evaluation
-
-This experiment aims to test the in-domain performance of our model. It is trained on the camera arrangement of ```CMU0``` on the CMU panoptic dataset, and also infer with the same camera arrangement.
-
-Infer with single GPU with ```BATCH_SIZE=1```:
-```
-python run/validate_3d.py --cfg configs/panoptic/knn5-lr4-q1024.yaml --model_path models/mvgformer_q1024_model.pth.tar TEST.BATCH_SIZE=1 
-```
-
-<!-- 
-
-[TBD] Please run a demo on inference result. If using more than 1 GPU, use distributed version.
-
-```
-python ./run/validate_3d.py --cfg configs/panoptic/knn3-lr4-q1024.yaml --model_path models/trained/knn5-lr4-q1024-ap92.3.pth.tar DECODER.inference_conf_thr=\[0.1\] TEST.BATCH_SIZE=1 DECODER.filter_query=True DEBUG.LOG_VAL_LOSS=False DECODER.return_intermediate_dec=False
-``` -->
-
-
-## LICENSE
-This repository is licensed under Apache-2.0. For commercial use, please reach out to the authors.
-
-## Acknowledgement
-
-Our work is based on the codebases of [MvP](https://github.com/sail-sg/mvp) and [VoxelPose](https://github.com/microsoft/voxelpose-pytorch). We deeply appreciate the authors for their invaluable contributions. 
+姿態模型基於 [MVGFormer 官方程式](https://github.com/XunshanMan/MVGFormer)。
+通訊設計受 [When2com](https://openaccess.thecvf.com/content_CVPR_2020/papers/Liu_When2com_Multi-Agent_Perception_via_Communication_Graph_Grouping_CVPR_2020_paper.pdf) 啟發，並非原協定的直接重現。
+集合編碼方式參考 [Deep Sets](https://arxiv.org/abs/1703.06114) 的共享編碼與不依順序的聚合概念。
+保留上游 [LICENSE](LICENSE) 與原始碼授權標頭。

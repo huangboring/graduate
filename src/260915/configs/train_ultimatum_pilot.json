@@ -1,0 +1,31 @@
+{
+  "data_root": "../data",
+  "pose_checkpoint": "models/mvgformer_q1024_model.pth.tar",
+  "pose_config": "configs/panoptic/knn5-lr4-q1024.yaml",
+  "output": "output/ultimatum_pilot",
+  "train_sequences": [
+    "160422_ultimatum1"
+  ],
+  "val_sequences": [],
+  "cameras": null,
+  "input_format": "auto",
+  "image_fps": 29.97002997,
+  "seed": 42,
+  "start_frame": 300,
+  "frame_stride": 30,
+  "frames_per_sequence": 300,
+  "max_candidate_views": 10,
+  "k_values": [
+    2
+  ],
+  "subset_limit": 16,
+  "threshold": 0.5,
+  "nms_mm": 200.0,
+  "match_mm": 500.0,
+  "epochs": 20,
+  "lr": 0.001,
+  "temperature_mm": 100.0,
+  "patience": 10,
+  "demo_k": 2,
+  "smoke_frames": 3
+}

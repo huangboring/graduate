@@ -1,0 +1,11 @@
+# Install a mutually compatible CUDA torch/torchvision pair for your GPU first.
+torch
+torchvision
+numpy
+opencv-python
+scipy
+matplotlib
+Pillow
+easydict
+PyYAML
+# Compile lib/models/ops separately to provide Deformable.
