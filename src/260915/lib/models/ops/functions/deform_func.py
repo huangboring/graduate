@@ -28,7 +28,12 @@ import torch.nn.functional as F
 from torch.autograd import Function
 from torch.autograd.function import once_differentiable
 
-import Deformable as DF
+try:
+    import Deformable as DF
+    HAS_DEFORMABLE = True
+except ImportError:
+    HAS_DEFORMABLE = False
+    print("Warning: Deformable CUDA extension is not installed. Falling back to pure PyTorch implementation (slower, for testing only).")
 
 
 class DeformFunction(Function):
@@ -36,6 +41,8 @@ class DeformFunction(Function):
     def forward(ctx, value, value_spatial_shapes,
                 value_level_start_index,
                 sampling_locations, attention_weights, im2col_step):
+        if not HAS_DEFORMABLE:
+            raise RuntimeError("DeformFunction.apply should not be called without CUDA extension. Use deform_core_pytorch directly.")
         ctx.im2col_step = im2col_step
         output = DF.deform_forward(
             value, value_spatial_shapes, value_level_start_index,
@@ -48,6 +55,8 @@ class DeformFunction(Function):
     @staticmethod
     @once_differentiable
     def backward(ctx, grad_output):
+        if not HAS_DEFORMABLE:
+            raise RuntimeError("DeformFunction.apply should not be called without CUDA extension.")
         (value, value_spatial_shapes,
          value_level_start_index,
          sampling_locations, attention_weights) = ctx.saved_tensors

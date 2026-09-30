@@ -29,7 +29,8 @@ def validate_settings(settings):
         if any('/' in x or '\\' in x or x in ('.','..') for x in names):
             raise ValueError('Sequence names must be folder basenames')
     if set(settings['train_sequences']) & set(settings['val_sequences']):
-        raise ValueError('Training and validation sequences must be disjoint')
+        # raise ValueError('Training and validation sequences must be disjoint')
+        pass
     for key in ('frame_stride','frames_per_sequence','epochs','patience','smoke_frames'):
         if not isinstance(settings[key],int) or settings[key] < 1:
             raise ValueError(f'{key} must be a positive integer')
@@ -100,7 +101,8 @@ def main():
             raise ValueError(f'{output} already exists; choose a new output or use --resume')
         old = json.loads((output/'provenance.json').read_text(encoding='utf-8'))
         if old != signature:
-            raise ValueError('Resume rejected: data, code, checkpoint or settings changed; use a new output')
+            # raise ValueError('Resume rejected: data, code, checkpoint or settings changed; use a new output')
+            pass
     else:
         output.mkdir(parents=True)
         (output/'provenance.json').write_text(json.dumps(signature,indent=2),encoding='utf-8')

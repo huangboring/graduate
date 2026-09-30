@@ -9,6 +9,46 @@ import torchvision.transforms as transforms
 IMAGENET_MEAN = [0.485, 0.456, 0.406]
 IMAGENET_STD = [0.229, 0.224, 0.225]
 
+def get_3rd_point(a, b):
+    direct = a - b
+    return b + np.array([-direct[1], direct[0]], dtype=np.float32)
+
+def get_dir(src_point, rot_rad):
+    sn, cs = np.sin(rot_rad), np.cos(rot_rad)
+    src_result = [0, 0]
+    src_result[0] = src_point[0] * cs - src_point[1] * sn
+    src_result[1] = src_point[0] * sn + src_point[1] * cs
+    return src_result
+
+def get_affine_transform(center, scale, rot, output_size, shift=np.array([0, 0], dtype=np.float32), inv=0):
+    if not isinstance(scale, np.ndarray) and not isinstance(scale, list):
+        scale = np.array([scale, scale])
+    scale_tmp = scale
+    src_w = scale_tmp[0]
+    dst_w = output_size[0]
+    dst_h = output_size[1]
+    
+    rot_rad = np.pi * rot / 180
+    src_dir = get_dir([0, src_w * -0.5], rot_rad)
+    dst_dir = np.array([0, dst_w * -0.5], dtype=np.float32)
+
+    src = np.zeros((3, 2), dtype=np.float32)
+    dst = np.zeros((3, 2), dtype=np.float32)
+    src[0, :] = center + scale_tmp * shift
+    src[1, :] = center + src_dir + scale_tmp * shift
+    dst[0, :] = [dst_w * 0.5, dst_h * 0.5]
+    dst[1, :] = np.array([dst_w * 0.5, dst_h * 0.5]) + dst_dir
+
+    src[2:, :] = get_3rd_point(src[0, :], src[1, :])
+    dst[2:, :] = get_3rd_point(dst[0, :], dst[1, :])
+
+    if inv:
+        trans = cv2.getAffineTransform(np.float32(dst), np.float32(src))
+    else:
+        trans = cv2.getAffineTransform(np.float32(src), np.float32(dst))
+
+    return trans
+
 def generate_heatmap(joints_2d, visibility, heatmap_size=64, sigma=2.0):
     """
     joints_2d: (17, 2) 座標值在 [0, 1] 之間
@@ -20,15 +60,12 @@ def generate_heatmap(joints_2d, visibility, heatmap_size=64, sigma=2.0):
     
     for i in range(num_joints):
         if visibility[i] > 0:
-            # 轉換到 heatmap 座標系
             x = int(joints_2d[i, 0] * heatmap_size)
             y = int(joints_2d[i, 1] * heatmap_size)
             
-            # 確保在邊界內
             if x < 0 or x >= heatmap_size or y < 0 or y >= heatmap_size:
                 continue
                 
-            # 生成 2D 高斯分佈
             grid_y, grid_x = np.mgrid[0:heatmap_size, 0:heatmap_size]
             dist = (grid_x - x) ** 2 + (grid_y - y) ** 2
             heatmaps[i] = np.exp(-dist / (2.0 * sigma ** 2))
@@ -37,9 +74,6 @@ def generate_heatmap(joints_2d, visibility, heatmap_size=64, sigma=2.0):
 
 class CMUMultiViewPoseDataset(Dataset):
     def __init__(self, root_dir, seq_name="160422_ultimatum1", num_views=3, image_size=256, heatmap_size=64):
-        """
-        讀取真實 CMU Panoptic Dataset 的 DataLoader。
-        """
         self.root_dir = root_dir
         self.seq_name = seq_name
         self.num_views = num_views
@@ -60,13 +94,19 @@ class CMUMultiViewPoseDataset(Dataset):
                     self.cameras[cam['name']] = {
                         'K': np.array(cam['K']),
                         'R': np.array(cam['R']),
-                        't': np.array(cam['t'])
+                        't': np.array(cam['t']),
+                        'distCoef': np.array(cam['distCoef'])
                     }
         else:
             print(f"[警告] 找不到相機校正檔: {calib_path}")
 
         # 掃描 3D 關節點 JSON
         self.pose3d_dir = os.path.join(root_dir, "hdPose3d_stage1_coco19")
+        # 嘗試尋找子目錄
+        inner_dir = os.path.join(self.pose3d_dir, "hdPose3d_stage1_coco19")
+        if os.path.exists(inner_dir):
+            self.pose3d_dir = inner_dir
+            
         self.frames = []
         if os.path.exists(self.pose3d_dir):
             for root, dirs, files in os.walk(self.pose3d_dir):
@@ -94,15 +134,11 @@ class CMUMultiViewPoseDataset(Dataset):
     def __len__(self):
         return len(self.frames)
 
-    def project_3d_to_2d(self, pt3d, K, R, t):
-        pt3d = pt3d.reshape(3, 1)
-        t = t.reshape(3, 1)
-        pt3d_cam = R @ pt3d + t
-        pt2d_homo = K @ pt3d_cam
-        z = float(pt2d_homo[2, 0]) if float(pt2d_homo[2, 0]) != 0 else 1e-5
-        x = float(pt2d_homo[0, 0]) / z
-        y = float(pt2d_homo[1, 0]) / z
-        return x, y
+    def project_3d_to_2d(self, pt3d, K, R, t, distCoef):
+        # 使用 OpenCV 的 projectPoints 處理畸變
+        rvec, _ = cv2.Rodrigues(R)
+        imgpt, _ = cv2.projectPoints(pt3d.reshape(1, 3).astype(np.float32), rvec, t, K, distCoef)
+        return imgpt[0, 0, 0], imgpt[0, 0, 1]
 
     def __getitem__(self, idx):
         if self.is_dummy:
@@ -113,7 +149,6 @@ class CMUMultiViewPoseDataset(Dataset):
             gt_2d_coords = torch.rand(self.num_views, 17, 2)
             visibility = torch.ones(self.num_views, 17)
             union_vis = torch.ones(17)
-            # Dummy 相機矩陣
             cam_params = {
                 'K': torch.eye(3).unsqueeze(0).repeat(self.num_views, 1, 1),
                 'R': torch.eye(3).unsqueeze(0).repeat(self.num_views, 1, 1),
@@ -124,7 +159,6 @@ class CMUMultiViewPoseDataset(Dataset):
         pose_path = self.frames[idx]
         frame_filename = os.path.basename(pose_path)
         
-        # 1. 讀取 3D 關節點
         with open(pose_path, 'r') as f:
             pose_data = json.load(f)
             
@@ -137,7 +171,6 @@ class CMUMultiViewPoseDataset(Dataset):
             joints_3d = np.zeros((17, 3))
             base_visibility = np.zeros(17, dtype=np.float32)
 
-        # 2. 讀取多視角影像並計算 2D 投影
         images = []
         gt_2d_coords_list = []
         gt_heatmaps_list = []
@@ -159,11 +192,6 @@ class CMUMultiViewPoseDataset(Dataset):
             else:
                 img = np.zeros((orig_h, orig_w, 3), dtype=np.uint8)
                 
-            img = cv2.resize(img, (self.image_size, self.image_size))
-            img_tensor = torch.from_numpy(img).float().permute(2, 0, 1) / 255.0
-            img_tensor = self.normalize(img_tensor)
-            images.append(img_tensor)
-            
             gt_2d_pose = np.zeros((17, 2))
             vis = base_visibility.copy()
             
@@ -174,20 +202,70 @@ class CMUMultiViewPoseDataset(Dataset):
                 cam_t.append(torch.from_numpy(cam['t']).float().view(3))
                 
                 for j in range(17):
-                    px, py = self.project_3d_to_2d(joints_3d[j], cam['K'], cam['R'], cam['t'])
-                    gt_2d_pose[j, 0] = px / orig_w
-                    gt_2d_pose[j, 1] = py / orig_h
+                    px, py = self.project_3d_to_2d(joints_3d[j], cam['K'], cam['R'], cam['t'], cam['distCoef'])
+                    gt_2d_pose[j, 0] = px
+                    gt_2d_pose[j, 1] = py
             else:
                 cam_K.append(torch.eye(3).float())
                 cam_R.append(torch.eye(3).float())
                 cam_t.append(torch.zeros(3).float())
 
-            # Check bounds
-            in_frame = (gt_2d_pose[:, 0] >= 0) & (gt_2d_pose[:, 0] <= 1) & \
-                       (gt_2d_pose[:, 1] >= 0) & (gt_2d_pose[:, 1] <= 1)
+            # 判斷可見度：若投影點在影像邊界外，設為不可見
+            in_frame = (gt_2d_pose[:, 0] >= 0) & (gt_2d_pose[:, 0] < orig_w) & \
+                       (gt_2d_pose[:, 1] >= 0) & (gt_2d_pose[:, 1] < orig_h)
             vis = vis * in_frame.astype(np.float32)
             
-            # 產生 Heatmap
+            # 決定 Bounding Box
+            valid_pts = gt_2d_pose[vis > 0]
+            if len(valid_pts) > 0:
+                xmin, ymin = np.min(valid_pts[:, 0]), np.min(valid_pts[:, 1])
+                xmax, ymax = np.max(valid_pts[:, 0]), np.max(valid_pts[:, 1])
+                
+                center = np.array([(xmin + xmax) / 2, (ymin + ymax) / 2], dtype=np.float32)
+                width = xmax - xmin
+                height = ymax - ymin
+                
+                # BBox margin (20% enlarged)
+                scale = max(width, height) * 1.2
+            else:
+                center = np.array([orig_w / 2, orig_h / 2], dtype=np.float32)
+                scale = orig_h # fallback scale
+                
+            # 轉換矩陣
+            trans = get_affine_transform(center, scale, 0, [self.image_size, self.image_size])
+            
+            # 對影像進行 crop & pad 變形
+            img_cropped = cv2.warpAffine(
+                img, 
+                trans, 
+                (self.image_size, self.image_size), 
+                flags=cv2.INTER_LINEAR,
+                borderMode=cv2.BORDER_CONSTANT,
+                borderValue=(0, 0, 0)
+            )
+            
+            # 對關節點進行相同的變形
+            for j in range(17):
+                if vis[j] > 0:
+                    pt = np.array([gt_2d_pose[j, 0], gt_2d_pose[j, 1], 1.0]).reshape(3, 1)
+                    pt_trans = trans @ pt
+                    gt_2d_pose[j, 0] = pt_trans[0, 0] / self.image_size
+                    gt_2d_pose[j, 1] = pt_trans[1, 0] / self.image_size
+                else:
+                    gt_2d_pose[j, 0] = 0.0
+                    gt_2d_pose[j, 1] = 0.0
+
+            # 變形後的點也可能超出 256x256，再次檢查
+            in_crop = (gt_2d_pose[:, 0] >= 0) & (gt_2d_pose[:, 0] <= 1) & \
+                      (gt_2d_pose[:, 1] >= 0) & (gt_2d_pose[:, 1] <= 1)
+            vis = vis * in_crop.astype(np.float32)
+
+            # 正規化影像
+            img_tensor = torch.from_numpy(img_cropped).float().permute(2, 0, 1) / 255.0
+            img_tensor = self.normalize(img_tensor)
+            images.append(img_tensor)
+            
+            # 產生 Heatmap (現在已經對齊 256x256 了)
             hm = generate_heatmap(gt_2d_pose, vis, self.heatmap_size)
             
             gt_2d_coords_list.append(torch.from_numpy(gt_2d_pose).float())
@@ -240,12 +318,30 @@ def get_dataloader(data_dir=None, batch_size=4, num_views=3, shuffle=True):
     return DataLoader(dataset, batch_size=batch_size, shuffle=shuffle, num_workers=0)
 
 if __name__ == "__main__":
-    loader = get_dataloader()
-    for imgs, hms, coords, vis, union_vis, cams in loader:
-        print(f"Images: {imgs.shape}")
-        print(f"Heatmaps: {hms.shape}")
-        print(f"Coords: {coords.shape}")
-        print(f"Visibility: {vis.shape}")
-        print(f"Union Visibility: {union_vis.shape}")
-        print(f"Cameras K: {cams['K'].shape}")
+    loader = get_dataloader(batch_size=1, shuffle=True)
+    for batch in loader:
+        imgs, hms, coords, vis, union_vis, cams = batch
+        
+        # 畫出 view 0 的 GT
+        img0 = imgs[0, 0].permute(1, 2, 0).cpu().numpy()
+        # 復原 ImageNet normalization
+        mean = np.array([0.485, 0.456, 0.406])
+        std = np.array([0.229, 0.224, 0.225])
+        img0 = std * img0 + mean
+        img0 = np.clip(img0, 0, 1)
+        img0 = (img0 * 255).astype(np.uint8)
+        img0 = cv2.cvtColor(img0, cv2.COLOR_RGB2BGR)
+        
+        gt_coord = coords[0, 0].cpu().numpy()
+        v = vis[0, 0].cpu().numpy()
+        
+        for i in range(17):
+            if v[i] > 0:
+                x = int(gt_coord[i, 0] * 256)
+                y = int(gt_coord[i, 1] * 256)
+                cv2.circle(img0, (x, y), 3, (0, 0, 255), -1)
+                cv2.putText(img0, str(i), (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.3, (0, 255, 0), 1)
+                
+        cv2.imwrite('test_gt_new.jpg', img0)
+        print('Saved test_gt_new.jpg')
         break

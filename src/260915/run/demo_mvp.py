@@ -65,7 +65,7 @@ def configure_bundle(args):
 
 def check_environment():
     packages = ('torch', 'torchvision', 'numpy', 'cv2', 'scipy', 'yaml',
-                'easydict', 'matplotlib', 'PIL', 'Deformable')
+                'easydict', 'matplotlib', 'PIL')
     report = {name: importlib.util.find_spec(name) is not None for name in packages}
     if report['torch']:
         import torch
