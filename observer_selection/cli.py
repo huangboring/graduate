@@ -73,6 +73,8 @@ def audit(repo):
 def main():
     parser=argparse.ArgumentParser(description='Causal observer selection: frozen backend + expected MPJPE')
     subs=parser.add_subparsers(dest='command',required=True)
+    raw=subs.add_parser('inspect-egohumans',help='Read-only inventory of trusted official raw EgoHumans data')
+    raw.add_argument('--sequence',required=True);raw.add_argument('--output',required=True)
     plots=subs.add_parser('report',help='Export run JSON to PNG/PDF/CSV')
     plots.add_argument('--run',required=True);plots.add_argument('--output',required=True)
     features=subs.add_parser('prepare-features',help='DINOv2/ViTPose extraction from prepared videos and audited detector boxes')
@@ -109,6 +111,9 @@ def main():
         else: p.add_argument('--model',required=True)
     args=parser.parse_args()
     torch.set_num_threads(min(torch.get_num_threads(),4))
+    if args.command=='inspect-egohumans':
+        from .raw_inventory import inventory_raw
+        print(json.dumps(inventory_raw(args.sequence,args.output),indent=2,ensure_ascii=True));return
     if args.command=='report':
         from .reports import export_report
         print(json.dumps(export_report(args.run,args.output),indent=2));return
