@@ -26,6 +26,7 @@ class TrainConfig:
     seed: int = 7
     history_limit: int = 256
     device: str = 'cpu'
+    training_only: bool = False
     acquisition: AcquisitionConfig = field(default_factory=AcquisitionConfig)
 
 
@@ -83,7 +84,9 @@ def train(data, output, backend, config: TrainConfig, validation_data=None, allo
             real_data |= str(archive['input_provenance'].item()) != 'synthetic_demo'
     if all(len(r['source_ids']) <= config.acquisition.max_sources for r in partition_manifest['train']):
         raise ValueError('No subset choice: every training roster fits the budget. Reduce max_sources or supply more candidates; do not pretend all-view acquisition trains selection.')
-    if real_data and not vpaths:
+    if config.training_only and vpaths:
+        raise ValueError('Training-only mode cannot report validation')
+    if real_data and not vpaths and not config.training_only:
         raise ValueError('Real-data training requires a disjoint validation split')
     torch.manual_seed(config.seed)
     rng = random.Random(config.seed)
@@ -99,6 +102,7 @@ def train(data, output, backend, config: TrainConfig, validation_data=None, allo
     if (output/'selector.pt').exists():
         raise FileExistsError('Output already contains selector.pt; choose a new run directory')
     manifest = {'config':asdict(config),'backend':type(backend).__name__,
+                'experiment_scope':'training_only_no_validation_or_test' if config.training_only else 'scene_disjoint',
                 'backend_provenance':backend_provenance(backend),
                 'allow_benchmark_inputs':allow_benchmark_inputs,
                 'train_files':[{ 'path':str(p.resolve()),'sha256':sha256_file(p)} for p in paths],
@@ -121,6 +125,7 @@ def train(data, output, backend, config: TrainConfig, validation_data=None, allo
             losses = []
             optimizer.zero_grad(set_to_none=True)
             for t, frame in enumerate(sequence):
+                if t%100==0: print(f'selector epoch {epoch+1}: frame {t+1}/{len(sequence)}',flush=True)
                 # Fix the WHOLE batch before looking at any current packet/cost.
                 decision = engine.score(frame.observation,frame.candidates,frame.geometry,sample=True,rng=rng)
                 distribution = engine.subset_distribution(decision)

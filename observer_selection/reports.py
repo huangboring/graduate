@@ -18,6 +18,8 @@ def export_report(run_dir, output):
         raise FileExistsError('Choose a fresh report directory')
     out.mkdir(parents=True, exist_ok=True)
     files = []
+    run_manifest = json.loads((run/'manifest.json').read_text(encoding='utf-8')) if (run/'manifest.json').is_file() else {}
+    training_only = run_manifest.get('experiment_scope') == 'training_only_no_validation_or_test'
 
     def save(fig, name):
         for ext in ('png', 'pdf'):
@@ -55,13 +57,15 @@ def export_report(run_dir, output):
                     ax.plot([r['epoch'] + int(recon) for r in rows], [r[key]*scale for r in rows], label=label)
             ax.set(xlabel='Epoch', ylabel='Error / objective (mm)',
                    title='Reconstructor training' if recon else 'Observer selector training')
+            if training_only: fig.text(.01,-.03,'IN-SAMPLE TRAINING ONLY: no validation or test',fontsize=8)
             ax.grid(alpha=.2); ax.legend(fontsize=8); save(fig, path.stem+'_curves')
             continue
 
         policies = data['policies']
         synthetic = ('synthetic_demo' in str(data.get('dataset', '')) or
                      any(r.get('is_synthetic', False) for r in data.get('heldout_data_manifest', [])))
-        notice = 'SYNTHETIC: pipeline verification only' if synthetic else 'Evaluation: verify split provenance in JSON'
+        notice = ('IN-SAMPLE TRAINING ONLY: no validation or test' if data.get('experiment_scope') == 'training_only_no_validation_or_test'
+                  else 'SYNTHETIC: pipeline verification only' if synthetic else 'Evaluation: verify split provenance in JSON')
         summaries = []
         for name, result in policies.items():
             summaries.append({'policy': name, 'scene_macro_mpjpe_mm': result.get('scene_macro_mpjpe_mm'),

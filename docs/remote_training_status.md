@@ -1,5 +1,11 @@
 # Remote DINOv2 training and report status
 
+Update: a raw preparation command and explicitly in-sample two-stage training
+entry are now available. Follow [single_sequence_quickstart.md](single_sequence_quickstart.md).
+The raw-data blocker list below describes the original upstream path; our new
+adapter corrects rotation and rejects frame/label omissions. Full real-data
+execution still needs validation on the remote host.
+
 The verified remote environment can execute DINOv2 (768 CLS), ViTPose
 (17 COCO heatmaps) and SMPL-H (52 joints). This is model execution verification,
 not dataset preparation or training. The feature adapter selects the upstream

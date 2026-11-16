@@ -49,10 +49,16 @@ def check_backend_splits(backend, partitions):
 
 def train_local_reconstructor(protocol_path, output, repository, body_model_path,
                               config=None, epochs=8, lr=1e-4, max_sources=2,
-                              device='cpu', seed=7):
+                              device='cpu', seed=7, train_only_data=None):
     if epochs<1 or lr<=0 or max_sources<1: raise ValueError('Positive training parameters required')
     config=config or LocalFusionConfig()
-    parts, manifests=load_protocol(protocol_path)
+    if train_only_data is not None:
+        if protocol_path is not None: raise ValueError('Train-only data is exclusive with protocol')
+        from .protocol import audit_partitions
+        parts={'train':[Path(train_only_data).resolve()],'validation':[]}
+        manifests=audit_partitions(parts)
+    else:
+        parts, manifests=load_protocol(protocol_path)
     torch.manual_seed(seed)
     net=LocalAuxFusionNet(repository,config).to(device)
     decode=load_body_decoder(repository,body_model_path,device)
@@ -72,7 +78,8 @@ def train_local_reconstructor(protocol_path, output, repository, body_model_path
         'initialization':'fresh; no pretrained AvatarNet weights imported',
         'loss':'last-frame joint0-root-relative MPJPE in metres, first22 incl root, no PA',
         'training_acquisition':'each frame uniform count 0..min(max_sources,N), uniform subset; actual acquired history only',
-        'output_axes':OUTPUT_AXES,'target_tracker_required':False,'neutral_shape':True}
+        'output_axes':OUTPUT_AXES,'target_tracker_required':False,'neutral_shape':True,
+        'experiment_scope':'training_only_no_validation_or_test' if train_only_data is not None else 'scene_disjoint'}
     (out/'manifest.json').write_text(json.dumps(manifest,indent=2),encoding='utf-8')
 
     def run(paths, training, epoch):
@@ -82,7 +89,9 @@ def train_local_reconstructor(protocol_path, output, repository, body_model_path
         for path in paths:
             seq=load_sequence(path)
             history=[]; errors=[]
-            for frame in seq:
+            for frame_index,frame in enumerate(seq):
+                if frame_index%100==0:
+                    print(f'reconstructor epoch {epoch+1}: {"train" if training else "validation"} frame {frame_index+1}/{len(seq)}',flush=True)
                 validate_reference(frame)
                 ids=tuple(sorted(rng.sample(list(frame.candidates),rng.randint(0,min(max_sources,len(frame.candidates))))))
                 packets=tuple(frame.packets[s] for s in ids)
@@ -115,13 +124,15 @@ def train_local_reconstructor(protocol_path, output, repository, body_model_path
     best=float('inf'); records=[]
     for epoch in range(epochs):
         train_error,updates=run(parts['train'],True,epoch)
-        val_error,_=run(parts['validation'],False,0)
+        val_error=run(parts['validation'],False,0)[0] if parts['validation'] else None
         records.append({'epoch':epoch,'train_mpjpe_mm':train_error*1000,
-                        'validation_scene_macro_mpjpe_mm':val_error*1000,'updates':updates})
+                        'validation_scene_macro_mpjpe_mm':val_error*1000 if val_error is not None else None,'updates':updates})
         state={**manifest,'state_dict':net.state_dict(),'epoch':epoch,'validation_mpjpe_m':val_error}
         torch.save(state,out/'last.pt')
-        if val_error<best:
+        if val_error is not None and val_error<best:
             best=val_error;torch.save(state,out/'best.pt')
         (out/'metrics.json').write_text(json.dumps(records,indent=2),encoding='utf-8')
-    return {'checkpoint':str((out/'best.pt').resolve()),'validation_mpjpe_mm':best*1000,
+        print(json.dumps(records[-1]),flush=True)
+    return {'checkpoint':str((out/('best.pt' if parts['validation'] else 'last.pt')).resolve()),
+            'validation_mpjpe_mm':best*1000 if parts['validation'] else None,
             'test_evaluated':False,'note':'Adapted reconstruction checkpoint; freeze for selector training'}

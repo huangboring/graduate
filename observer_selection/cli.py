@@ -55,6 +55,9 @@ function draw(){let frames=report.policies[select.value].frames;slider.max=Math.
 ctx.clearRect(0,0,1050,560);if(!f.joints)return;let a=+yaw.value*Math.PI/180;let points=[...f.joints,...f.gt];let extent=Math.max(.2,...points.flatMap(p=>p.map(Math.abs)));let scale=240/extent;ctx.strokeStyle='#ccc';ctx.beginPath();ctx.moveTo(525,0);ctx.lineTo(525,560);ctx.moveTo(0,280);ctx.lineTo(1050,280);ctx.stroke();
 for(const [arr,color] of [[f.gt,'#dd8c35'],[f.joints,'#3274b2']])arr.forEach((p,i)=>{let up=report.vertical_axis==='z'?2:1,depth=up===2?1:2;let x=525+scale*(p[0]*Math.cos(a)+p[depth]*Math.sin(a)),y=280+(report.vertical_direction==='down'?1:-1)*scale*p[up];ctx.fillStyle=color;ctx.beginPath();ctx.arc(x,y,4,0,7);ctx.fill();ctx.fillText(i,x+6,y-4)})}
 select.onchange=()=>{slider.value=0;draw()};slider.oninput=draw;yaw.oninput=draw;draw();</script></html>'''.replace('DATA',encoded,1)
+    if report.get('experiment_scope') == 'training_only_no_validation_or_test':
+        html=html.replace('合成資料只驗證程式流程；不代表 EgoExoMoCap 或真實資料的研究效果。',
+                          'IN-SAMPLE：這是訓練過的同一段資料，沒有獨立驗證或測試，不能作為泛化成績。')
     Path(output).write_text(html,encoding='utf-8')
 
 
@@ -73,6 +76,17 @@ def audit(repo):
 def main():
     parser=argparse.ArgumentParser(description='Causal observer selection: frozen backend + expected MPJPE')
     subs=parser.add_subparsers(dest='command',required=True)
+    prep=subs.add_parser('prepare-raw',help='Rectify official EgoHumans, initialize image identity, track and extract features')
+    prep.add_argument('--sequence',required=True);prep.add_argument('--output',required=True)
+    prep.add_argument('--target',default='aria01');prep.add_argument('--requester',default='aria02')
+    prep.add_argument('--sources',nargs='+',default=['aria03','aria04'])
+    prep.add_argument('--repo',default='external/EgoExoMoCap');prep.add_argument('--body-model')
+    prep.add_argument('--device',default='cuda')
+    fit=subs.add_parser('fit-sequence',help='Train both stages on one sequence; IN-SAMPLE results only')
+    fit.add_argument('--data',required=True);fit.add_argument('--output',required=True)
+    fit.add_argument('--body-model',required=True);fit.add_argument('--repo',default='external/EgoExoMoCap')
+    fit.add_argument('--device',default='cuda');fit.add_argument('--recon-epochs',type=int,default=8)
+    fit.add_argument('--selector-epochs',type=int,default=8)
     raw=subs.add_parser('inspect-egohumans',help='Read-only inventory of trusted official raw EgoHumans data')
     raw.add_argument('--sequence',required=True);raw.add_argument('--output',required=True)
     plots=subs.add_parser('report',help='Export run JSON to PNG/PDF/CSV')
@@ -111,6 +125,14 @@ def main():
         else: p.add_argument('--model',required=True)
     args=parser.parse_args()
     torch.set_num_threads(min(torch.get_num_threads(),4))
+    if args.command=='prepare-raw':
+        from .raw_prepare import prepare_raw
+        print(json.dumps(prepare_raw(args.sequence,args.output,args.target,args.requester,args.sources,
+            args.repo,args.body_model,args.device),indent=2));return
+    if args.command=='fit-sequence':
+        from .single_sequence import fit_sequence
+        print(json.dumps(fit_sequence(args.data,args.output,args.repo,args.body_model,args.device,
+            args.recon_epochs,args.selector_epochs),indent=2));return
     if args.command=='inspect-egohumans':
         from .raw_inventory import inventory_raw
         print(json.dumps(inventory_raw(args.sequence,args.output),indent=2,ensure_ascii=True));return

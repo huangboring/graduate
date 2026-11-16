@@ -212,3 +212,19 @@ class LocalAuxTests(unittest.TestCase):
         report=evaluate(selector,[load_sequence(paths['test'][0])],backend,policies=['learned'])
         self.assertEqual(report['policies']['learned']['evaluated_frames'],2)
         for k,v in before.items():torch.testing.assert_close(v,backend.net.state_dict()[k],atol=0,rtol=0)
+
+        # Explicit single-sequence mode must not invent a validation metric or
+        # produce a validation-selected best.pt; same-data held-out eval fails.
+        with patch('observer_selection.local_training.load_body_decoder',return_value=fake_decode):
+            solo=train_local_reconstructor(None,fixture.root/'solo_reconstructor',REPO,body,
+                config,epochs=1,max_sources=1,train_only_data=paths['train'][0])
+        self.assertIsNone(solo['validation_mpjpe_mm'])
+        self.assertFalse((fixture.root/'solo_reconstructor/best.pt').exists())
+        with patch('observer_selection.local_fusion.load_body_decoder',return_value=fake_decode):
+            solo_backend=LocalAuxBackend.from_checkpoint(REPO,solo['checkpoint'],body)
+        _,rows=train(paths['train'],fixture.root/'solo_selector',solo_backend,
+            TrainConfig(epochs=1,hidden=16,acquisition=acq,training_only=True))
+        self.assertNotIn('validation_mpjpe_mm',rows[0])
+        solo_selector=load_network(fixture.root/'solo_selector/selector.pt')
+        with self.assertRaisesRegex(ValueError,'overlaps'):
+            verify_heldout(solo_selector,paths['train'],solo_backend)
