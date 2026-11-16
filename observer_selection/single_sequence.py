@@ -10,9 +10,12 @@ from .reports import export_report
 
 
 def fit_sequence(data, output, repo, body_model, device='cuda', recon_epochs=8, selector_epochs=8):
+    from .preparation_quality import check_preparation
+    quality=check_preparation(data)
     out=Path(output)
     if out.exists() and any(out.iterdir()): raise FileExistsError('Use a fresh experiment directory')
     out.mkdir(parents=True,exist_ok=True)
+    _save_json(out/'preparation_quality.json',quality)
     _save_json(out/'experiment.json',{'scope':'training_only_no_validation_or_test',
         'data':str(Path(data).resolve()),'max_sources':1,
         'warning':'Every curve/pose/policy comparison is in-sample. No generalization claim.'})

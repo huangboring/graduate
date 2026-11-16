@@ -78,10 +78,12 @@ class RawGeometryTests(unittest.TestCase):
         import cv2
         from observer_selection.raw_prepare import prepare_raw
         from observer_selection.replay import load_sequence
+        counter={'calls':0}
         class Detector:
             def eval(self): return self
             def to(self,device): return self
             def __call__(self,images):
+                counter['calls']+=1
                 return [{'labels':torch.tensor([1]),'scores':torch.tensor([.9]),
                          'boxes':torch.tensor([[100.,100.,600.,900.]])}]
         class Dino:
@@ -127,13 +129,26 @@ class RawGeometryTests(unittest.TestCase):
             for name in ('config.json','preprocessor_config.json','model.safetensors'):(vitdir/name).write_text('EXPLICIT_FIXTURE')
             body=base/'fake_body.npz';body.write_bytes(b'EXPLICIT_FAKE_FK')
             def make_detector(**kwargs):
-                cache=Path(torch.hub.get_dir())/'checkpoints';cache.mkdir(parents=True)
+                cache=Path(torch.hub.get_dir())/'checkpoints';cache.mkdir(parents=True,exist_ok=True)
                 (cache/'fasterrcnn_resnet50_fpn-fixture.pth').write_bytes(b'EXPLICIT_FAKE_DETECTOR')
                 return Detector()
             with patch.dict('sys.modules',{'transformers':transformers,'human_body_prior.body_model.body_model':bodymodule}), \
                  patch('torchvision.models.detection.fasterrcnn_resnet50_fpn',side_effect=make_detector), \
-                 patch('observer_selection.image_features.DinoV2Encoder',Dino),patch('builtins.input',return_value='0'):
-                result=prepare_raw(root,out,repo=repo,body_model=body,device='cpu')
+                 patch('observer_selection.image_features.DinoV2Encoder',Dino):
+                with patch('builtins.input',side_effect=['0','q']):
+                    with self.assertRaises(KeyboardInterrupt):prepare_raw(root,out,repo=repo,body_model=body,device='cpu')
+                self.assertEqual(counter['calls'],3)
+                with patch('builtins.input',side_effect=['0','0']):
+                    result=prepare_raw(root,out,repo=repo,body_model=body,device='cpu',resume=True)
+                self.assertEqual(counter['calls'],6)  # all 3x2 frames inferred exactly once
+                self.assertEqual(result['tracking']['aria03']['cache_hits'],1)
+                with patch('builtins.input',side_effect=AssertionError('Completed run must not ask again')):
+                    repeated=prepare_raw(root,out,repo=repo,body_model=body,device='cpu',resume=True)
+                self.assertEqual(counter['calls'],6)
+                self.assertEqual(repeated['output'],result['output'])
+                with patch('builtins.input',return_value='0'):
+                    prepare_raw(root,out,repo=repo,body_model=body,device='cpu',resume=True,reset_views=['aria02'])
+                self.assertEqual(counter['calls'],6)  # identity correction reuses image inference
             sequence=load_sequence(result['output'])
             self.assertEqual(len(sequence),2)
             self.assertEqual(sequence[0].candidates,('aria03','aria04'))

@@ -21,27 +21,39 @@ git pull --ff-only
 ## Prepare raw images
 
 ```powershell
-& $gpuPython -m observer_selection prepare-raw --sequence data/EgoHumans/01_tagging/001_tagging --output data/prepared/tagging001_v2 --target aria01 --requester aria02 --sources aria03 aria04 --device cuda
+& $gpuPython -m observer_selection prepare-raw --sequence data/EgoHumans/01_tagging/001_tagging --output data/prepared/tagging001_v3 --target aria01 --requester aria02 --sources aria03 aria04 --device cuda --model-cache data/prepared/tagging001_v2/model_cache --resume
 ```
 
 The baseline is torchvision Faster R-CNN ResNet50-FPN COCO_V1, person score
-threshold 0.7. Its weights download into the output directory's model_cache
-on D:, not the default user profile. ViTPose/DINOv2 use the existing local
-weights. The generated crop is square, padded outside the image exactly as
-in the existing feature preparation API. Model/config/source hashes are saved.
+threshold 0.7. The command reuses the previously downloaded weights through
+`--model-cache`; omit that argument on a fresh installation to use the output
+directory's model_cache. ViTPose/DINOv2 use the existing local weights. Pose
+features use the existing square padded crop; tracking appearance uses each
+detector rectangle. Model/config/source/input hashes are saved.
 
 For each observer, open the printed `identity_frame_XXXXX.jpg` in VS Code.
 Enter the box index of the actual target aria01, not an arbitrary person.
 Dataset identity must be established by the operator; a detector box number
 does not itself identify an Aria participant. Enter `n` if the target is absent;
 the next initialization question is at least 20 frames later. Earlier frames
-remain missing; we do not fill them using later observations. `q` aborts.
+remain missing; we do not fill them using later observations. `q` stops while
+preserving candidate caches and previous identity choices. Later observers'
+identity sheets show a reference crop from the first observer. This helps
+manual matching; it does not prove that the person corresponds to aria01.
 
-Tracking is a deliberately disclosed conservative baseline: maximum IoU >=0.2,
-runner-up margin >=0.1. After 5 consecutive unmatched frames it does not
-automatically reacquire another person. There is no GT-based assignment and
-no bidirectional smoothing. This can leave long missing intervals and needs
-review on fast motion/crossings; it is not claimed as a robust identity tracker.
+Tracking now uses causal DINOv2 appearance plus IoU. Normal association uses
+0.7*cosine_similarity + 0.3*IoU, requires similarity >=0.55, IoU >=0.05 and a
+best-versus-runner-up score margin >=0.08. Global reacquisition is attempted
+every frame, regardless of the length of the missing interval: similarity
+>=0.75 and appearance margin >=0.08. The initial descriptor stays in a bounded
+gallery; only confident recent matches extend it (>=0.85, interval 10 frames,
+maximum 8 templates). These are engineering defaults, not validated optimum
+thresholds. DINOv2 is a generic feature encoder, not a trained person ReID model.
+Similar clothing, crossings or occlusion can still cause missing/wrong tracks.
+No GT, future image, remote camera geometry or cross-view features enter this
+association. Initial manual identity is explicitly disclosed; no later manual
+recovery annotations are silently introduced. The obsolete permanent-stop
+behaviour is removed. Old v2 observations are NOT reused as v3 tracking.
 Each source produces `tracking_preview.mp4`, green target boxes, and coverage
 statistics in `preparation_summary.json`. Inspect these before trusting labels.
 If identity switches occur, do not report results as correct tracking.
@@ -61,8 +73,21 @@ The confirmed sequence has 601 frames, 20 Hz. For A=aria02, B=aria01, helpers
 aria03/aria04, three views require 1,803 image-frame passes for detection and
 another 1,803 rectification passes for features. Runtime includes manual ID
 initialization and cannot be inferred from GPU name alone. Progress is printed
-every 50 frames; final actual wall time is recorded. Folders must be new;
-interrupted preparation does not currently resume.
+every 50 frames. Candidate detections and appearance features are saved per
+frame before prompting. With `--resume`, identical raw files/models/settings
+reuse completed views and cached GPU inference. Partial views replay their
+cached past in chronological order to rebuild tracker state; no later frame
+fills earlier missing observations. An interrupted feature stage is archived
+and recomputed; completed view features are reused. The summary records wall
+time for the current invocation, not total time across previous interruptions.
+
+To correct a mistaken initial identity, append `--reset-view aria02` to the
+same resume command. Generated outputs are archived, and cached candidate
+inference is retained. If the target person was wrong across all views, use
+`--reset-view aria02 aria03 aria04`. Old replay outputs are archived so they
+cannot be mistaken for a newly corrected export. A changed raw input/model or
+algorithm contract requires a new output folder, while model weights may be
+shared. Do not run two writers against the same output directory concurrently.
 
 Exception: if failure occurred during camera setup, before any detections,
 rerun the same `prepare-raw` command with `--restart-setup`. It retains model
@@ -80,7 +105,7 @@ loading feature models or downloading the detector weights.
 ## Train both stages and generate results
 
 ```powershell
-& $gpuPython -m observer_selection fit-sequence --data data/prepared/tagging001_v2/replay.npz --output runs/tagging001_v2 --body-model external/EgoExoMoCap/third_party/body_models/smplh/neutral/model.npz --device cuda --recon-epochs 8 --selector-epochs 8
+& $gpuPython -m observer_selection fit-sequence --data data/prepared/tagging001_v3/replay.npz --output runs/tagging001_v3 --body-model external/EgoExoMoCap/third_party/body_models/smplh/neutral/model.npz --device cuda --recon-epochs 8 --selector-epochs 8
 ```
 
 This performs actual weight updates, not a dry run. It freshly trains the
@@ -97,10 +122,15 @@ train selection; no labels identifying the 'best observer' are fabricated.
 
 Outputs:
 
-- `runs/tagging001_v2/reconstructor/figures/metrics_curves.png` and PDF/CSV
-- `runs/tagging001_v2/selector/figures/training_curves.png` and PDF/CSV
-- `runs/tagging001_v2/training_results/figures/`: policy/error/selection charts
-- `runs/tagging001_v2/training_results/viewer.html`: interactive pose points
+- `runs/tagging001_v3/preparation_quality.json`: observation availability and tracking statistics
+- `runs/tagging001_v3/reconstructor/figures/metrics_curves.png` and PDF/CSV
+- `runs/tagging001_v3/selector/figures/training_curves.png` and PDF/CSV
+- `runs/tagging001_v3/training_results/figures/`: policy/error/selection charts
+- `runs/tagging001_v3/training_results/viewer.html`: interactive pose points
+
+Training preflight rejects incomplete v3 exports and known legacy permanent
+track-loss results. Availability counts are recorded but are not proof of
+identity accuracy or physical visibility. Inspect each tracking preview.
 
 Training-only status is printed on figures and the viewer. The reference is
 dataset fitted pose, not newly measured ground-truth mocap. Held-out evaluation

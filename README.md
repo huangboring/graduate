@@ -2,6 +2,8 @@
 
 **另一台主機部署：**先看 [Git clone、環境、資料位置與版本限制](docs/remote_setup.md)。上游版本固定在 `configs/upstream.lock.json`；資料與權重另行下載。目前 local-aux 尚未實作官方預訓練權重移植。
 
+**已下載 EgoHumans、要先開訓：**使用 [單序列前處理、兩階段訓練與出圖](docs/single_sequence_quickstart.md)。新前處理使用 DINOv2 外觀與位置追蹤，失配後持續嘗試重新取得；支援逐幀快取與 `--resume`。單序列結果明確標為訓練資料上的擬合，不代表獨立測試效果。
+
 本專案依本機 A 的當幀觀測與真正取得過的歷史，決定向哪些觀測者取得目標 B 的資料。**完整名單先決定，再一次呼叫取用介面；收到第一份資料後不重新選第二人。**v4 新增本機＋輔助視角重建器：以 A 看見 B 的觀測為主分支，不需要 B 自身 tracker；沿用 EgoExoMoCap 空間／時間融合模組與 SMPL-H 輸出。先訓練改版重建器，再凍結它訓練選擇器。
 
 目前是 v4 local-aux 版本，選擇器沿用 v3 批次子集與重訪。**尚無真實 EgoHumans 訓練結果**；新後端仍需授權 SMPL-H、human_body_prior、因果前處理資料與新訓練權重，不使用原版 checkpoint 充當改版權重。[v4 架構、差異、資料與兩階段訓練](docs/local_aux_v4.md)。
