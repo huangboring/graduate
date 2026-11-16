@@ -76,6 +76,9 @@ def audit(repo):
 def main():
     parser=argparse.ArgumentParser(description='Causal observer selection: frozen backend + expected MPJPE')
     subs=parser.add_subparsers(dest='command',required=True)
+    identity=subs.add_parser('audit-identity',help='Offline official EXO annotation ID gallery; does not alter training/preparation')
+    identity.add_argument('--sequence',required=True);identity.add_argument('--output',required=True)
+    identity.add_argument('--frame',type=int,default=1)
     prep=subs.add_parser('prepare-raw',help='Rectify official EgoHumans, initialize image identity, track and extract features')
     prep.add_argument('--sequence',required=True);prep.add_argument('--output',required=True)
     prep.add_argument('--target',default='aria01');prep.add_argument('--requester',default='aria02')
@@ -129,6 +132,9 @@ def main():
         else: p.add_argument('--model',required=True)
     args=parser.parse_args()
     torch.set_num_threads(min(torch.get_num_threads(),4))
+    if args.command=='audit-identity':
+        from .identity_audit import audit_identity
+        print(json.dumps(audit_identity(args.sequence,args.output,args.frame),indent=2));return
     if args.command=='prepare-raw':
         from .raw_prepare import prepare_raw
         print(json.dumps(prepare_raw(args.sequence,args.output,args.target,args.requester,args.sources,

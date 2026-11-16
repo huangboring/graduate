@@ -102,6 +102,37 @@ Reflection, shear and non-uniform scale remain errors. Per-camera alignment
 scales are saved in export provenance. All camera frames are validated before
 loading feature models or downloading the detector weights.
 
+## Correct a mistaken initial identity
+
+Do not replace `identity_selected.jpg` by hand: saved decisions and observations
+would still describe the old selection. Detector index 0 does not mean aria01.
+First review the supplied dataset identity labels in EXO images:
+
+```powershell
+& $gpuPython -m observer_selection audit-identity --sequence data/EgoHumans/01_tagging/001_tagging --output data/identity_audit/tagging001_frame1
+Start-Process data/identity_audit/tagging001_frame1/index.html
+```
+
+This independent CPU command renders official `human_name`/`bbox` records from
+`processed_data/poses2d/camXX/rgb/00001.npy` over the matching EXO images. It
+does not change preparation contracts, cached detections, or training inputs.
+It rejects records lacking explicit identities rather than inferring them from
+list order. Orange boxes flag invalid or zero-confidence pose evidence; even
+green annotations require visual review. Missing annotations/images are reported.
+Official schema references:
+https://github.com/rawalkhirodkar/egohumans/blob/main/egohumans/lib/datasets/ego_exo_scene.py
+https://github.com/rawalkhirodkar/egohumans/blob/main/egohumans/lib/models/pose_estimator.py
+
+Disclose this as **dataset-annotation-assisted manual identity initialization**,
+not autonomous identity discovery. The audit reads first-frame annotations;
+later-frame audits must not be represented as causal first-frame initialization.
+No annotation boxes/keypoints are exported to model inputs. Retain the audit
+JSON with experiment records. If IDs cannot be verified, do not train mismatched
+images and labels. Once aria01 is identified, run the same prepare command with
+`--resume --reset-view aria02 aria03 aria04` to correct all initial selections.
+This archives old derived outputs and preserves per-frame detector/DINO caches.
+Omit `--reset-view` on subsequent ordinary resumes or it will reset them again.
+
 ## Train both stages and generate results
 
 ```powershell
