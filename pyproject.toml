@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "observer-selection-v1"
+version = "4.0.0"
+description = "Causal pre-acquisition observer selection with recurrent source memory"
+requires-python = ">=3.10"
+dependencies = ["numpy>=1.26", "torch>=2.2", "PyYAML>=6"]
+
+[project.optional-dependencies]
+data = ["Pillow", "imageio[ffmpeg]"]
+
+[project.scripts]
+observer-selection = "observer_selection.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["observer_selection*"]

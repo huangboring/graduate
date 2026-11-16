@@ -1,0 +1,3 @@
+[submodule "external/EgoExoMoCap"]
+	path = external/EgoExoMoCap
+	url = https://github.com/eth-siplab/EgoExoMoCap.git

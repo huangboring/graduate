@@ -1,0 +1,6 @@
+{
+  "repository": "https://github.com/eth-siplab/EgoExoMoCap.git",
+  "commit": "99576ed5805d3b81b59e60ec26b809210364bafa",
+  "relative_path": "external/EgoExoMoCap",
+  "purpose": "Exact upstream source used for integration tests; no weights or datasets bundled"
+}

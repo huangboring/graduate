@@ -1,0 +1,20 @@
+{
+  "schema_version": 2,
+  "source_dataset": "egohumans",
+  "scene_id": "REPLACE_WITH_SCENE",
+  "sequence_id": "REPLACE_WITH_SEQUENCE",
+  "target_id": "aria01",
+  "requester_id": "aria02",
+  "source_ids": ["aria03", "aria04"],
+  "pairs": {
+    "aria02": "prepared/target_aria01_observer_aria02",
+    "aria03": "prepared/target_aria01_observer_aria03",
+    "aria04": "prepared/target_aria01_observer_aria04"
+  },
+  "camera_calibration": {
+    "provenance": "calibrated",
+    "description": "REPLACE: identify calibration/tracking source, shared world frame and rectification process",
+    "target_pose_used": false,
+    "rectified_pinhole": true
+  }
+}

@@ -1,35 +1,48 @@
-# Python 快取與編譯檔
 __pycache__/
-*.py[cod]
-*.class
+*.pyc
+*.egg-info/
+.venv/
+runs/
 
-# 虛擬環境與套件
+# Local environments and credentials
 venv/
 env/
-.env/
-torch_packages/
-pip_temp/
-pip_cache/
+.env
+.env.*
+!.env.example
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.idea/
+.vscode/
 
-# 機器學習模型權重 (全面排除)
+# Datasets, licensed models, pretrained weights and generated artifacts
+data/
+dataset/
+datasets/
+weights/
+checkpoints/
+model_zoo/
+third_party/
+output/
+outputs/
+tmp/
+*.npz
+*.npy
 *.pth
 *.pt
+*.safetensors
+*.pkl
 *.ckpt
-*.onnx
-
-# 專案特定資料集 (非常重要：避免把巨大資料推上 Git)
-data/
-src/data/
-datasets/
-hdPose3d_stage1_coco19/
-hdVideos/
-hd_*/
-
-# 日誌與暫存檔
+*.zip
+*.tar
+*.tar.gz
+*.mp4
+*.vrs
 *.log
-logs/
-.DS_Store
 
-# IDE 設定 (可選)
-.vscode/
-.idea/
+# Packaging / OS artifacts
+build/
+dist/
+.DS_Store
+Thumbs.db
