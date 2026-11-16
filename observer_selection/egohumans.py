@@ -269,7 +269,7 @@ def prepare_local_features(pair_dir, boxes_path, boxes_receipt_path, vit, dino,
     pair=Path(pair_dir);boxpath=Path(boxes_path);receiptpath=Path(boxes_receipt_path)
     destination=pair/'selector_observations.npz';outreceipt=pair/'selector_preparation.json'
     if destination.exists() or outreceipt.exists():raise FileExistsError('Causal features already exist; choose a fresh prepared directory')
-    if set(feature_model_ids)!={'vitpose','dinov3'} or not all(feature_model_ids.values()):
+    if set(feature_model_ids) not in ({'vitpose','dinov3'}, {'vitpose','dinov2'}) or not all(feature_model_ids.values()):
         raise ValueError('Record exact ViTPose and DINO checkpoint IDs/digests')
     receipt=_json(receiptpath);boxes=_npz(boxpath);meta=_json(pair/'meta.json');ts=_timestamps(pair,meta);T=len(ts)
     if receipt.get('crop_source')!='local_image_detector' or receipt.get('reference_pose_used') is not False or receipt.get('output_sha256')!=_hash(boxpath):

@@ -73,6 +73,14 @@ def audit(repo):
 def main():
     parser=argparse.ArgumentParser(description='Causal observer selection: frozen backend + expected MPJPE')
     subs=parser.add_subparsers(dest='command',required=True)
+    plots=subs.add_parser('report',help='Export run JSON to PNG/PDF/CSV')
+    plots.add_argument('--run',required=True);plots.add_argument('--output',required=True)
+    features=subs.add_parser('prepare-features',help='DINOv2/ViTPose extraction from prepared videos and audited detector boxes')
+    features.add_argument('--pair',required=True);features.add_argument('--boxes',required=True)
+    features.add_argument('--receipt',required=True);features.add_argument('--device',default='cuda')
+    features.add_argument('--repo',default='external/EgoExoMoCap')
+    features.add_argument('--vitpose',default='external/EgoExoMoCap/third_party/vitpose_hf/vitpose-base-simple')
+    features.add_argument('--dinov2',default='external/EgoExoMoCap/third_party/dinov2_hf/dinov2-base')
     ap=subs.add_parser('audit');ap.add_argument('--repo',default='external/EgoExoMoCap');ap.add_argument('--output')
     check=subs.add_parser('check-data');check.add_argument('--protocol',required=True);check.add_argument('--output')
     export=subs.add_parser('export-egohumans');export.add_argument('--manifest',required=True);export.add_argument('--output',required=True)
@@ -101,6 +109,13 @@ def main():
         else: p.add_argument('--model',required=True)
     args=parser.parse_args()
     torch.set_num_threads(min(torch.get_num_threads(),4))
+    if args.command=='report':
+        from .reports import export_report
+        print(json.dumps(export_report(args.run,args.output),indent=2));return
+    if args.command=='prepare-features':
+        from .image_features import prepare_dinov2_features
+        prepare_dinov2_features(args.pair,args.boxes,args.receipt,args.vitpose,args.dinov2,args.repo,args.device)
+        print('DINOv2/ViTPose features complete');return
     if args.command=='export-local-egohumans':
         from .local_data import export_local_egohumans
         print(json.dumps(export_local_egohumans(args.manifest,args.output),ensure_ascii=False,indent=2));return
