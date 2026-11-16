@@ -11,7 +11,7 @@ def check_preparation(data):
     summary=json.loads(summary_path.read_text(encoding='utf-8')) if summary_path.is_file() else {}
     if any(s.get('terminal_track_loss') for s in summary.get('tracking',{}).values()):
         raise ValueError('Legacy tracker stopped permanently. Reprepare using appearance tracking; do not train this export.')
-    if (folder/'preparation_run.json').exists():
+    if (folder/'preparation_run.json').exists() or (folder/'finalization_run.json').exists():
         marker=folder/'preparation_complete.json'
         if not marker.exists(): raise ValueError('Raw preparation is incomplete; resume it before training')
         for name,digest in json.loads(marker.read_text(encoding='utf-8')).items():

@@ -45,7 +45,7 @@ def export_local_egohumans(manifest_path, output_path):
             grid, world = ts, meta.get('world_frame')
         if world is None or meta.get('world_frame') != world or not np.array_equal(ts,grid):
             raise ValueError('Pair timestamps/world frames must match exactly')
-        data, deps = _selector_observations(pair,grid)
+        data, deps = _selector_observations(pair,grid,confidence_policy='clip_heatmap_v1')
         cam = _npz(pair/'observer.npz'); T=len(grid)
         R = _rotations(cam['observer_head_R'],T,'camera device rotation')
         p = _array(cam['observer_head_pos'],(T,3),'camera device translation')
@@ -89,6 +89,9 @@ def export_local_egohumans(manifest_path, output_path):
         'input_files':[{'path':str(p.resolve()),'sha256':_hash(p)} for p in dict.fromkeys(dependencies)],
         'camera_calibration':calibration,'target_tracker_used':False,'dropped_initial_frames':0,
         'reference_usage':'GT first22 root-relative joints for loss only; not model inputs',
-        'output_axes':OUTPUT_AXES,'shape_policy':'neutral decoder, not GT betas'}
+        'output_axes':OUTPUT_AXES,'shape_policy':'neutral decoder, not GT betas',
+        'confidence_encoding':{s:pairs[s]['confidence_encoding'] for s in pairs},
+        'exporter_sha256':_hash(Path(__file__)),
+        'observation_reader_sha256':_hash(Path(__file__).with_name('egohumans.py'))}
     sidecar.write_text(json.dumps(receipt,indent=2),encoding='utf-8')
     return {'output':str(output),'provenance':str(sidecar),'frames':T,'candidates':list(sources)}

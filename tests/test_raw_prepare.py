@@ -157,3 +157,17 @@ class RawGeometryTests(unittest.TestCase):
             receipt=json.loads((out/'replay.provenance.json').read_text())
             self.assertFalse(receipt['target_tracker_used'])
             self.assertAlmostEqual(receipt['camera_calibration']['alignment_scales']['aria02'],.5)
+            from observer_selection.finalize_raw import finalize_raw
+            from observer_selection.preparation_quality import check_preparation
+            from observer_selection.egohumans import _hash
+            original=_hash(out/'aria02/selector_observations.npz')
+            with patch('observer_selection.raw_tracking.extract_candidates',side_effect=AssertionError('No GPU reprocessing')):
+                finalized=finalize_raw(out,base/'finalized')
+            self.assertEqual(original,_hash(out/'aria02/selector_observations.npz'))
+            self.assertEqual(check_preparation(finalized['output'])['frames'],2)
+            self.assertEqual(len(load_sequence(finalized['output'])),2)
+            # A changed source must fail before any new export is written.
+            (root/'ego/aria02/calib/00001.txt').write_text('changed')
+            with self.assertRaisesRegex(ValueError,'Original raw input changed'):
+                finalize_raw(out,base/'invalid_finalization')
+            self.assertFalse((base/'invalid_finalization').exists())

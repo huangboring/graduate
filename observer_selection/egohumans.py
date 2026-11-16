@@ -103,7 +103,7 @@ def compute_rays(xy, valid, camera, tracker):
     return np.where(valid[:,None,None],local,0).reshape(T,39).astype('f4')
 
 
-def _selector_observations(pair: Path, timestamps: np.ndarray):
+def _selector_observations(pair: Path, timestamps: np.ndarray, confidence_policy='strict'):
     data_path=pair/'selector_observations.npz'
     receipt_path=pair/'selector_preparation.json'
     if not receipt_path.is_file() or not data_path.is_file():
@@ -130,8 +130,19 @@ def _selector_observations(pair: Path, timestamps: np.ndarray):
     xy=_array(data['xy'],(T,13,2),'xy').astype('f4')
     conf=_array(data['confidence'],(T,13),'confidence').astype('f4')
     valid=_array(data['bbox_valid'],(T,),'bbox_valid')
-    if not np.isin(valid,[0,1]).all() or np.any((conf<0)|(conf>1)):
-        raise ValueError('Invalid availability/confidence encoding')
+    if not np.isin(valid,[0,1]).all():
+        raise ValueError('Invalid availability encoding: bbox_valid must be boolean')
+    if confidence_policy not in ('strict','clip_heatmap_v1'):
+        raise ValueError('Unknown confidence encoding policy')
+    confidence_encoding={'policy':confidence_policy,'raw_min':float(conf.min()),
+        'raw_max':float(conf.max()),'below_zero':int((conf<0).sum()),'above_one':int((conf>1).sum()),
+        'calibrated_probability':False}
+    if confidence_policy=='strict' and np.any((conf<0)|(conf>1)):
+        raise ValueError(f'Invalid confidence encoding: range [{conf.min()}, {conf.max()}]')
+    if confidence_policy=='clip_heatmap_v1':
+        # Heatmap amplitudes are not probabilities. Keep source NPZ untouched;
+        # this explicit export feature transform is recorded in provenance.
+        conf=np.clip(conf,0,1)
     valid=valid.astype(bool)
     boxes=_array(data['bbox'],(T,4),'bbox').astype('f4').copy()
     if np.any(boxes[valid,2:]<=boxes[valid,:2]):
@@ -144,7 +155,8 @@ def _selector_observations(pair: Path, timestamps: np.ndarray):
     boxes[~valid]=[0,0,float(image_size[0]),float(image_size[1])]
     xy=xy.copy();conf=conf.copy();xy[~valid]=0;conf[~valid]=0
     dino=_array(data['dino_cls'],(T,768),'dino_cls').astype('f4').copy();dino[~valid]=0
-    return {'xy':xy,'confidence':conf,'bbox':boxes,'bbox_valid':valid,'dino_cls':dino},[data_path,receipt_path]
+    return {'xy':xy,'confidence':conf,'bbox':boxes,'bbox_valid':valid,'dino_cls':dino,
+            'confidence_encoding':confidence_encoding},[data_path,receipt_path]
 
 
 def export_prepared_egohumans(manifest_path, output_path, allow_benchmark_inputs=False):

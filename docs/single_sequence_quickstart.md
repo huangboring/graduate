@@ -135,6 +135,27 @@ Omit `--reset-view` on subsequent ordinary resumes or it will reset them again.
 
 ## Train both stages and generate results
 
+If all three observation stages completed but export failed with confidence
+outside `[0,1]`, preserve the original folder and run:
+
+```powershell
+& $gpuPython -m observer_selection finalize-raw --prepared data/prepared/tagging001_v3 --output data/prepared/tagging001_v3_export
+```
+
+This verifies completed-view hashes and original raw inputs, then re-exports
+without detection, feature inference, or FK recomputation. Use the new
+`tagging001_v3_export/replay.npz` as `--data`. Original observations/receipts
+remain unchanged. This path also avoids rerunning old preparation contracts
+after the observation reader code changed. Missing stages are errors.
+
+Local-aux exports explicitly apply `clip_heatmap_v1`: clip finite ViTPose
+heatmap scores to `[0,1]` as a bounded feature, not a calibrated probability.
+Raw feature files preserve all amplitudes. The export sidecar records per-view
+raw min/max, counts below zero/above one, the policy and code hashes. NaN/Inf
+and invalid availability flags remain errors. This does not change bbox
+validity, identity assignments or repair poor tracking. A completed export
+with only one tracked frame is not thereby adequate for research training.
+
 ```powershell
 & $gpuPython -m observer_selection fit-sequence --data data/prepared/tagging001_v3/replay.npz --output runs/tagging001_v3 --body-model external/EgoExoMoCap/third_party/body_models/smplh/neutral/model.npz --device cuda --recon-epochs 8 --selector-epochs 8
 ```
