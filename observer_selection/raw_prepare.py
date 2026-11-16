@@ -136,7 +136,7 @@ def match_track(previous, boxes, minimum_iou=.2, ambiguity_margin=.1):
 
 def prepare_raw(sequence, output, target='aria01', requester='aria02', sources=('aria03','aria04'),
                 repo='external/EgoExoMoCap', body_model=None, device='cuda', restart_setup=False,
-                resume=False, model_cache=None, reset_views=()):
+                resume=False, model_cache=None, reset_views=(), review_tracking=False, reuse_candidates=None):
     from .raw_pipeline import prepare_raw as run
     return run(sequence, output, target, requester, sources, repo, body_model, device,
-               restart_setup, resume, model_cache, reset_views)
+               restart_setup, resume, model_cache, reset_views, review_tracking, reuse_candidates)

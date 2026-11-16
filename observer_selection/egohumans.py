@@ -286,8 +286,13 @@ def prepare_local_features(pair_dir, boxes_path, boxes_receipt_path, vit, dino,
     receipt=_json(receiptpath);boxes=_npz(boxpath);meta=_json(pair/'meta.json');ts=_timestamps(pair,meta);T=len(ts)
     if receipt.get('crop_source')!='local_image_detector' or receipt.get('reference_pose_used') is not False or receipt.get('output_sha256')!=_hash(boxpath):
         raise ValueError('Need detector-produced boxes and verifiable non-reference-pose receipt; do not relabel GT/egonet boxes')
-    if not receipt.get('detector_checkpoint') or receipt.get('identity_source') not in ('local_tracking','manual_initial_identity'):
+    if not receipt.get('detector_checkpoint') or receipt.get('identity_source') not in ('local_tracking','manual_initial_identity','manual_initial_and_recovery_review'):
         raise ValueError('Detector checkpoint and causal target identity association must be recorded')
+    recovery_log=None
+    if receipt.get('identity_source')=='manual_initial_and_recovery_review':
+        recovery_log=pair/'recovery_choices.json'
+        if not recovery_log.is_file() or _hash(recovery_log)!=receipt.get('manual_recovery_choices_sha256'):
+            raise ValueError('Manual recovery annotation digest mismatch')
     if not np.array_equal(boxes.get('timestamps_ns'),ts):raise ValueError('Box timestamps do not align exactly')
     last=_array(boxes['last_input_t_ns'],(T,),'last_input_t_ns')
     if np.any(last>ts):raise ValueError('Box detector used future frames')
@@ -334,5 +339,7 @@ def prepare_local_features(pair_dir, boxes_path, boxes_receipt_path, vit, dino,
          'input_files':[{'path':str(p.resolve()),'sha256':_hash(p)} for p in (boxpath,receiptpath,pair/'meta.json',pair/'timestamps.csv')],
          'generator_sha256':_hash(Path(__file__))}
     if video.is_file():out['input_files'].append({'path':str(video.resolve()),'sha256':_hash(video)})
+    out['identity_source']=receipt['identity_source']
+    if recovery_log is not None:out['input_files'].append({'path':str(recovery_log.resolve()),'sha256':_hash(recovery_log)})
     outreceipt.write_text(json.dumps(out,indent=2),encoding='utf-8')
     return str(destination)

@@ -13,7 +13,7 @@ from .preparation_cache import (atomic_json, atomic_npz, load_or_create_contract
 
 def prepare_raw(sequence, output, target='aria01', requester='aria02', sources=('aria03','aria04'),
                 repo='external/EgoExoMoCap', body_model=None, device='cuda', restart_setup=False,
-                resume=False, model_cache=None, reset_views=()):
+                resume=False, model_cache=None, reset_views=(), review_tracking=False, reuse_candidates=None):
     import torch
     from torchvision.models.detection import fasterrcnn_resnet50_fpn, FasterRCNN_ResNet50_FPN_Weights
     from .image_features import DinoV2Encoder, checkpoint_identity
@@ -77,17 +77,21 @@ def prepare_raw(sequence, output, target='aria01', requester='aria02', sources=(
     input_files=[{'path':str(p),'sha256':_hash(p)} for p in all_inputs]
     from . import raw_prepare,raw_tracking,appearance_tracking,image_features,egohumans
     contract={'schema_version':3,'sequence':str(root),'target':target,'requester':requester,'sources':list(sources),
+              'review_tracking':review_tracking,
               'raw_frame_ids':ids,'input_files':input_files,'feature_models':models,'detector':detector_id,
               'tracker':AppearanceTracker().description(),'device':device,'torch':str(torch.__version__),
               'pipeline_sha256':_hash(Path(__file__)),
               'code_hashes':{m.__name__:_hash(Path(m.__file__)) for m in (raw_prepare,raw_tracking,appearance_tracking,image_features,egohumans)}}
     load_or_create_contract(out/'preparation_run.json',contract,resume)
+    if reuse_candidates:
+        from .candidate_reuse import reuse_candidate_cache
+        reuse_candidate_cache(reuse_candidates,out,contract)
     if reset_views:
         archive_outputs(out,['manifest.json','replay.npz','replay.provenance.json','preparation_summary.json','preparation_complete.json'])
         for aria in reset_views:
             pair=out/aria
             if pair.exists():
-                names=['identity_choices.json','identity_selected.jpg','identity_reference.jpg','view_complete.json',
+                names=['identity_choices.json','recovery_choices.json','tracking_diagnostics.json','identity_selected.jpg','identity_reference.jpg','view_complete.json',
                        'detector_boxes.npz','detector_receipt.json','selector_observations.npz','selector_preparation.json','tracking_preview.mp4']
                 archive_outputs(pair,names)
     T=len(ids);timestamps=np.arange(T,dtype=np.int64)*50_000_000
@@ -111,7 +115,7 @@ def prepare_raw(sequence, output, target='aria01', requester='aria02', sources=(
         atomic_npz(pair/'observer.npz',observer_K=K,observer_T_dev_cam=np.eye(4),observer_head_R=poses[:,:3,:3],
                    observer_head_pos=poses[:,:3,3],observer_img_size=[1408,1408])
         frames=RectifiedFrames(images[aria],calibs[aria])
-        stats[aria]=track_view(pair,frames,ids,timestamps,detector,dino,device,target,detector_id,reference)
+        stats[aria]=track_view(pair,frames,ids,timestamps,detector,dino,device,target,detector_id,reference,review_tracking)
         archive_partial_features(pair)
         prepare_local_features(pair,pair/'detector_boxes.npz',pair/'detector_receipt.json',vit,dino,models,frames)
         feature_receipt=pair/'selector_preparation.json';r=json.loads(feature_receipt.read_text(encoding='utf-8'))

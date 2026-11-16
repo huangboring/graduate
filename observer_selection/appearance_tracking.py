@@ -7,7 +7,7 @@ baseline and cannot certify identity; ambiguous candidates remain missing.
 from dataclasses import asdict, dataclass
 import numpy as np
 
-VERSION = 'causal_dinov2_association_v1'
+VERSION = 'causal_dinov2_association_v2'
 
 
 @dataclass(frozen=True)
@@ -47,6 +47,8 @@ class AppearanceTracker:
         self.last_seen = self.last_step = self.gallery_frame = -1
         self.recoveries = 0
         self.reason = 'uninitialized'
+        self.recent = None
+        self.diagnostics = []
 
     @property
     def initialized(self): return bool(self.gallery)
@@ -54,6 +56,7 @@ class AppearanceTracker:
     def initialize(self, frame, box, feature):
         if self.initialized: raise ValueError('Identity may only be initialized once')
         self.gallery = [normalized(np.asarray(feature)[None])[0].copy()]
+        self.recent = self.gallery[0].copy()
         self.previous = np.asarray(box, dtype=np.float32).copy()
         if self.previous.shape != (4,) or np.any(self.previous[2:] <= self.previous[:2]):
             raise ValueError('Invalid identity box')
@@ -64,6 +67,7 @@ class AppearanceTracker:
         if frame <= self.last_step: raise ValueError('Tracker requires strictly increasing frame indices')
         self.last_step = frame
         boxes = np.asarray(boxes, dtype=np.float32)
+        self.diagnostics = []
         if boxes.shape != (len(features), 4) or not np.isfinite(boxes).all():
             raise ValueError('Invalid candidate boxes/features')
         if not self.initialized:
@@ -75,18 +79,25 @@ class AppearanceTracker:
         # A gallery only contains previously accepted, high-confidence crops.
         similarities = features @ np.stack(self.gallery).T
         appearance = similarities.max(axis=1)
+        recent_similarity = features @ self.recent
         ious = box_iou(self.previous, boxes)
         gap = frame - self.last_seen
         cfg = self.config
         selected = None
         if gap <= 5:
-            score = .7*appearance + .3*ious
+            # Follow gradual appearance changes using only the last accepted
+            # frame. Long-gap recovery still uses the conservative gallery.
+            temporal_appearance = np.maximum(appearance, recent_similarity)
+            score = .7*temporal_appearance + .3*ious
             ranked = np.argsort(score)[::-1]
             best = int(ranked[0])
             margin = float(score[best]-score[ranked[1]]) if len(ranked)>1 else float('inf')
-            if (appearance[best] >= cfg.tracking_similarity and ious[best] >= cfg.minimum_iou
+            if (temporal_appearance[best] >= cfg.tracking_similarity and ious[best] >= cfg.minimum_iou
                     and margin >= cfg.tracking_margin):
                 selected = best
+        self.diagnostics = [{'index':i,'gallery_cosine':float(appearance[i]),
+            'recent_cosine':float(recent_similarity[i]),'iou':float(ious[i]),'gap':int(gap)}
+            for i in range(len(boxes))]
         if selected is None:
             # Always try global appearance association, even after a long gap.
             ranked = np.argsort(appearance)[::-1]
@@ -102,6 +113,7 @@ class AppearanceTracker:
         else:
             self.reason = 'motion_and_appearance'
         self.previous = boxes[selected].copy()
+        self.recent = features[selected].copy()
         self.last_seen = frame
         # Keep the immutable initial seed; cautiously extend the pose gallery.
         if (appearance[selected] >= cfg.gallery_similarity and gap <= 2

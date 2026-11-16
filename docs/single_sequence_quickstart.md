@@ -104,6 +104,45 @@ loading feature models or downloading the detector weights.
 
 ## Correct a mistaken initial identity
 
+### v4 preparation after persistent appearance mismatches
+
+The v2 association algorithm uses both the last accepted appearance and the
+conservative seed/gallery for short-gap matching. Its thresholds are unchanged;
+long-gap automatic recovery still requires the gallery evidence. This addresses
+gradual appearance changes, but can still drift and is not certified ReID.
+
+For explicit **manually assisted tracking**, use a fresh output and import
+only candidate detections/descriptors from v3:
+
+```powershell
+& $gpuPython -m observer_selection prepare-raw --sequence data/EgoHumans/01_tagging/001_tagging --output data/prepared/tagging001_v4 --target aria01 --requester aria02 --sources aria03 aria04 --device cuda --model-cache data/prepared/tagging001_v2/model_cache --reuse-candidates data/prepared/tagging001_v3 --review-tracking --resume
+```
+
+Candidate import verifies the original input/model contract and array shapes;
+old identity choices, boxes and extracted joint features are not imported.
+Corrected tracks require ViTPose and crop-feature extraction again, but detector
+and candidate DINO inference is reused. Old v3 files are preserved.
+
+`--review-tracking` asks for a current-frame identity annotation after five
+consecutive misses and every 100 frames since the last review (when there are
+candidate boxes). Following a review it waits at least 20 frames before asking
+again. `n` means no matching candidate, not proof the person is physically absent;
+it clears the active association. `q` preserves caches/decisions. Rerun the same
+command to resume. `identity_current.jpg` always contains the latest prompt;
+the timestamped file is retained too. The user must select the previously
+verified aria01, not detection index 1. Do not select a different person merely
+to increase coverage. If the detector never boxes the visible target, this mode
+cannot recover it: retain missing observations and inspect the detector failure.
+
+Additional annotations are recorded in `recovery_choices.json`, digested in
+receipts, and counted as `manual_review_count`. They only affect the annotated
+frame and subsequent tracking, never earlier missing frames. Declare this as
+**annotation-assisted preprocessing**, not an autonomous deployed system.
+Periodic review cannot prove or repair identity switches between reviews;
+inspect the final preview. `tracking_diagnostics.json` records per-candidate
+gallery/recent cosine similarity, IoU, gap, and the automatic decision before
+manual intervention. Coverage is not an identity-accuracy metric.
+
 Do not replace `identity_selected.jpg` by hand: saved decisions and observations
 would still describe the old selection. Detector index 0 does not mean aria01.
 First review the supplied dataset identity labels in EXO images:

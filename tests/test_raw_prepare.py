@@ -149,6 +149,13 @@ class RawGeometryTests(unittest.TestCase):
                 with patch('builtins.input',return_value='0'):
                     prepare_raw(root,out,repo=repo,body_model=body,device='cpu',resume=True,reset_views=['aria02'])
                 self.assertEqual(counter['calls'],6)  # identity correction reuses image inference
+                with patch('builtins.input',side_effect=['0','0','0']):
+                    reviewed=prepare_raw(root,base/'reviewed',repo=repo,body_model=body,device='cpu',
+                                         review_tracking=True,reuse_candidates=out)
+                self.assertEqual(counter['calls'],6)  # algorithm change must reuse detector inference
+                self.assertEqual(reviewed['tracking']['aria02']['identity_protocol'],'manual_initial_and_recovery_review')
+                review_receipt=json.loads((base/'reviewed/aria02/selector_preparation.json').read_text())
+                self.assertEqual(review_receipt['identity_source'],'manual_initial_and_recovery_review')
             sequence=load_sequence(result['output'])
             self.assertEqual(len(sequence),2)
             self.assertEqual(sequence[0].candidates,('aria03','aria04'))
