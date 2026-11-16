@@ -64,6 +64,19 @@ initialization and cannot be inferred from GPU name alone. Progress is printed
 every 50 frames; final actual wall time is recorded. Folders must be new;
 interrupted preparation does not currently resume.
 
+Exception: if failure occurred during camera setup, before any detections,
+rerun the same `prepare-raw` command with `--restart-setup`. It retains model
+weights and checks that existing metadata/frame grids match. It refuses to
+overwrite identity images, tracking videos, detector outputs or features.
+
+Aria-to-COLMAP alignment includes positive uniform scale. The adapter checks
+the similarity structure and divides the full composed camera extrinsic's
+top 3x4 block by that scale, including its translation. Projection and world
+camera centre are unchanged; the anchor world and GT are not rescaled.
+Reflection, shear and non-uniform scale remain errors. Per-camera alignment
+scales are saved in export provenance. All camera frames are validated before
+loading feature models or downloading the detector weights.
+
 ## Train both stages and generate results
 
 ```powershell

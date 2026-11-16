@@ -51,9 +51,55 @@ def make_map(intr, size=1408):
     return pixels[...,0].astype('f4'),pixels[...,1].astype('f4')
 
 
+def similarity_camera_extrinsic(transform):
+    """Normalize a positive uniform similarity without changing projection.
+
+    E=[sR,t] maps anchor-world coordinates to native-camera coordinates.
+    E/s=[R,t/s] preserves image rays AND world camera centre -R.T@t/s.
+    Dividing R alone would change the camera centre and is incorrect.
+    This does not rescale the anchor world, GT, or pinhole intrinsics.
+    """
+    a=np.asarray(transform,dtype=np.float64)
+    if a.shape!=(4,4) or not np.isfinite(a).all() or not np.allclose(a[3],[0,0,0,1],atol=1e-8,rtol=0):
+        raise ValueError('Camera alignment must be a finite affine 4x4 transform')
+    determinant=float(np.linalg.det(a[:3,:3]))
+    if determinant<=0:
+        raise ValueError(f'Camera alignment must have positive scale and no reflection; det={determinant}')
+    scale=float(np.cbrt(determinant))
+    result=a.copy();result[:3,:]/=scale
+    rotation=result[:3,:3]
+    if not np.allclose(rotation.T@rotation,np.eye(3),atol=2e-4,rtol=0):
+        singular=np.linalg.svd(a[:3,:3],compute_uv=False)
+        raise ValueError(f'Camera alignment is not uniform scale times rotation; singular_values={singular.tolist()}')
+    return result,scale
+
+
 def upright_camera(native_world_to_camera):
+    native_world_to_camera,_=similarity_camera_extrinsic(native_world_to_camera)
     rotation = np.eye(4); rotation[:3,:3] = Q_UPRIGHT
     return rigid(np.linalg.inv(rotation @ native_world_to_camera), 'upright camera')
+
+
+def validate_setup_restart(output, roster):
+    """Allow retry ONLY before observation extraction, preserving model cache."""
+    out=Path(output)
+    if not out.exists(): return
+    for path in out.iterdir():
+        if path.is_symlink(): raise FileExistsError(f'Restart refuses symlink: {path}')
+        if path.name=='model_cache' and path.is_dir(): continue
+        if path.name not in roster or not path.is_dir():
+            raise FileExistsError(f'Restart only supports camera setup failures; found {path}')
+        for child in path.iterdir():
+            if child.is_symlink() or not child.is_file() or child.name not in ('meta.json','timestamps.csv','observer.npz'):
+                raise FileExistsError(f'Observation work already exists; refusing to overwrite {child}')
+
+
+def check_existing_setup(pair, meta, timestamp_text):
+    for name,value in (('meta.json',meta),('timestamps.csv',timestamp_text)):
+        path=Path(pair)/name
+        if not path.exists(): continue
+        old=json.loads(path.read_text(encoding='utf-8')) if name.endswith('.json') else path.read_text()
+        if old!=value: raise ValueError(f'Restart settings/frame grid differ from {path}')
 
 
 class RectifiedFrames:
@@ -92,7 +138,7 @@ def match_track(previous, boxes, minimum_iou=.2, ambiguity_margin=.1):
 
 
 def prepare_raw(sequence, output, target='aria01', requester='aria02', sources=('aria03','aria04'),
-                repo='external/EgoExoMoCap', body_model=None, device='cuda'):
+                repo='external/EgoExoMoCap', body_model=None, device='cuda', restart_setup=False):
     import cv2
     import torch
     from torchvision.models.detection import fasterrcnn_resnet50_fpn, FasterRCNN_ResNet50_FPN_Weights
@@ -107,7 +153,8 @@ def prepare_raw(sequence, output, target='aria01', requester='aria02', sources=(
     roster = (requester,*sources)
     if len(set((target,*roster))) != len(roster)+1 or len(sources)<2:
         raise ValueError('Need distinct target, requester and at least two helpers')
-    if out.exists() and any(out.iterdir()): raise FileExistsError('Use a fresh preparation directory')
+    if restart_setup: validate_setup_restart(out,roster)
+    elif out.exists() and any(out.iterdir()): raise FileExistsError('Use a fresh preparation directory; --restart-setup only retries failures before observations')
     if not root.is_dir(): raise FileNotFoundError(root)
     def numbered(folder,suffix):
         return {int(p.stem):p for p in folder.glob('*'+suffix) if p.stem.isdecimal()}
@@ -123,6 +170,14 @@ def prepare_raw(sequence, output, target='aria01', requester='aria02', sources=(
     transform_file=root/'colmap/workplace/colmap_from_aria_transforms.pkl'
     with transform_file.open('rb') as stream: transforms=pickle.load(stream)
     if any(a not in transforms for a in ('aria01',*roster)): raise ValueError('Missing world transforms')
+    # Validate every camera BEFORE allocating models/downloading weights.
+    camera_poses,scales={},{}
+    for aria in roster:
+        relative=np.linalg.inv(transforms[aria])@transforms['aria01']
+        _,scale=similarity_camera_extrinsic(relative)
+        scales[aria]=scale
+        camera_poses[aria]=np.stack([upright_camera(read_calibration(p)[1]@relative) for p in calibs[aria]])
+        print(f'{aria}: camera calibration OK; alignment scale={scale:.9g}',flush=True)
     out.mkdir(parents=True,exist_ok=True)
     torch.hub.set_dir(str(out/'model_cache'))  # never default to C: for detector download
     weights=FasterRCNN_ResNet50_FPN_Weights.COCO_V1
@@ -143,14 +198,15 @@ def prepare_raw(sequence, output, target='aria01', requester='aria02', sources=(
     K=np.array([[704.,0,703.5],[0,704.,703.5],[0,0,1.]])
     pairs={}; stats={}
     for aria in roster:
-        pair=out/aria; pair.mkdir(); pairs[aria]=str(pair)
+        pair=out/aria; pair.mkdir(exist_ok=restart_setup); pairs[aria]=str(pair)
         meta={'source_dataset':'egohumans','source_scene':root.parent.name,'source_subseq':root.name,
               'wearer_aria':target,'observer_aria':aria,'world_frame':'aria01_local',
               'n_frames':T,'t_start_ns':0,'dt_ns':50_000_000,'raw_frame_ids':ids}
+        timestamp_text='frame_idx,t_ns\n'+''.join(f'{i},{t}\n' for i,t in enumerate(timestamps))
+        if restart_setup: check_existing_setup(pair,meta,timestamp_text)
         (pair/'meta.json').write_text(json.dumps(meta,indent=2),encoding='utf-8')
-        (pair/'timestamps.csv').write_text('frame_idx,t_ns\n'+''.join(f'{i},{t}\n' for i,t in enumerate(timestamps)))
-        relative=np.linalg.inv(transforms[aria])@transforms['aria01']
-        poses=np.stack([upright_camera(read_calibration(p)[1]@relative) for p in calibs[aria]])
+        (pair/'timestamps.csv').write_text(timestamp_text)
+        poses=camera_poses[aria]
         np.savez(pair/'observer.npz',observer_K=K,observer_T_dev_cam=np.eye(4),
                  observer_head_R=poses[:,:3,:3],observer_head_pos=poses[:,:3,3],observer_img_size=[1408,1408])
         frames=RectifiedFrames(images[aria],calibs[aria])
@@ -237,6 +293,7 @@ def prepare_raw(sequence, output, target='aria01', requester='aria02', sources=(
     manifest={'schema_version':2,'source_dataset':'egohumans','scene_id':root.parent.name,'sequence_id':root.name,
               'target_id':target,'requester_id':requester,'source_ids':list(sources),'pairs':pairs,
               'camera_calibration':{'provenance':'calibrated','target_pose_used':False,'rectified_pinhole':True,
+                'alignment_scales':scales,'scale_normalization':'divide full world-to-camera top3x4 by positive uniform scale; preserve camera centre and projection',
                 'description':'Official per-frame Aria calibration; aria01 anchor; native CCW / rectification / upright CW; rotate camera axes Q, diagonal K'}}
     mp=out/'manifest.json';mp.write_text(json.dumps(manifest,indent=2),encoding='utf-8')
     exported=export_local_egohumans(mp,out/'replay.npz')

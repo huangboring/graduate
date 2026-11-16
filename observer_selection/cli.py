@@ -82,6 +82,7 @@ def main():
     prep.add_argument('--sources',nargs='+',default=['aria03','aria04'])
     prep.add_argument('--repo',default='external/EgoExoMoCap');prep.add_argument('--body-model')
     prep.add_argument('--device',default='cuda')
+    prep.add_argument('--restart-setup',action='store_true',help='Retry pre-observation setup failure; preserve downloaded weights, reject existing observation outputs')
     fit=subs.add_parser('fit-sequence',help='Train both stages on one sequence; IN-SAMPLE results only')
     fit.add_argument('--data',required=True);fit.add_argument('--output',required=True)
     fit.add_argument('--body-model',required=True);fit.add_argument('--repo',default='external/EgoExoMoCap')
@@ -128,7 +129,7 @@ def main():
     if args.command=='prepare-raw':
         from .raw_prepare import prepare_raw
         print(json.dumps(prepare_raw(args.sequence,args.output,args.target,args.requester,args.sources,
-            args.repo,args.body_model,args.device),indent=2));return
+            args.repo,args.body_model,args.device,args.restart_setup),indent=2));return
     if args.command=='fit-sequence':
         from .single_sequence import fit_sequence
         print(json.dumps(fit_sequence(args.data,args.output,args.repo,args.body_model,args.device,

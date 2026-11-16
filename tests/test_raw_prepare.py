@@ -6,10 +6,48 @@ from pathlib import Path
 from types import SimpleNamespace, ModuleType
 from unittest.mock import patch
 import numpy as np
-from observer_selection.raw_prepare import fisheye_project, upright_camera, Q_UPRIGHT, match_track
+from observer_selection.raw_prepare import (fisheye_project, upright_camera, Q_UPRIGHT, match_track,
+    similarity_camera_extrinsic,validate_setup_restart,check_existing_setup)
 
 
 class RawGeometryTests(unittest.TestCase):
+    def test_similarity_preserves_camera_centre_and_projection(self):
+        angle=.4
+        R=np.array([[np.cos(angle),0,np.sin(angle)],[0,1,0],[-np.sin(angle),0,np.cos(angle)]])
+        for s in (.4,1.,2.7):
+            ext=np.eye(4);ext[:3,:3]=s*R;ext[:3,3]=[.5,-.2,1.3]
+            normalized,scale=similarity_camera_extrinsic(ext)
+            self.assertAlmostEqual(scale,s)
+            np.testing.assert_allclose(normalized[:3,3],ext[:3,3]/s)
+            camera=upright_camera(ext)
+            np.testing.assert_allclose(camera[:3,3],np.linalg.inv(ext)[:3,3],atol=1e-12)
+            points=np.array([[.3,-.1,3,1],[-1,.2,4,1],[2,-.3,6,1]])
+            original=(ext@points.T).T[:,:3]@Q_UPRIGHT.T
+            recovered=(np.linalg.inv(camera)@points.T).T[:,:3]
+            # rigid() shares the model's float32 input contract; tolerate only
+            # float32 roundoff (well below 0.001 pixels at focal length 704).
+            np.testing.assert_allclose(original[:,:2]/original[:,2:],recovered[:,:2]/recovered[:,2:],atol=1e-7)
+
+    def test_reject_shear_nonuniform_scale_reflection_and_bad_bottom_row(self):
+        matrices=[np.diag([1,2,1,1]),np.diag([-1,1,1,1]),np.zeros((4,4))]
+        shear=np.eye(4);shear[0,1]=.1;matrices.append(shear)
+        perspective=np.eye(4);perspective[3,0]=.1;matrices.append(perspective)
+        for matrix in matrices:
+            with self.assertRaises(ValueError): similarity_camera_extrinsic(matrix)
+
+    def test_restart_preserves_weights_and_refuses_observation_outputs(self):
+        with tempfile.TemporaryDirectory() as temp:
+            out=Path(temp);(out/'model_cache/checkpoints').mkdir(parents=True)
+            weights=out/'model_cache/checkpoints/fake.pth';weights.write_bytes(b'keep')
+            pair=out/'aria02';pair.mkdir()
+            (pair/'meta.json').write_text('{"target":"aria01"}')
+            (pair/'timestamps.csv').write_text('frame_idx,t_ns\n0,0\n')
+            validate_setup_restart(out,('aria02','aria03','aria04'))
+            check_existing_setup(pair,{'target':'aria01'},'frame_idx,t_ns\n0,0\n')
+            with self.assertRaises(ValueError): check_existing_setup(pair,{'target':'aria04'},'frame_idx,t_ns\n0,0\n')
+            self.assertEqual(weights.read_bytes(),b'keep')
+            (pair/'tracking_preview.mp4').write_bytes(b'keep observations')
+            with self.assertRaises(FileExistsError): validate_setup_restart(out,('aria02',))
     def test_optical_axis_and_radial_projection(self):
         intr=np.zeros(15);intr[:3]=[600,700,710]
         points=np.array([[0,0,1],[1,0,1],[0,1,1]])
@@ -74,7 +112,9 @@ class RawGeometryTests(unittest.TestCase):
                     cv2.imwrite(str(folder/f'images/rgb/{frame:05}.jpg'),np.zeros((1408,1408,3),np.uint8))
             (root/'colmap/workplace').mkdir(parents=True)
             with (root/'colmap/workplace/colmap_from_aria_transforms.pkl').open('wb') as f:
-                pickle.dump({a:np.eye(4) for a in ('aria01','aria02','aria03','aria04')},f)
+                transforms={a:np.diag([scale,scale,scale,1.]) for a,scale in
+                            zip(('aria01','aria02','aria03','aria04'),(1.,2.,3.,4.))}
+                pickle.dump(transforms,f)
             (root/'processed_data/smpl').mkdir(parents=True)
             for frame in (1,2):
                 np.save(root/f'processed_data/smpl/{frame:05}.npy',{'aria01':{
@@ -101,3 +141,4 @@ class RawGeometryTests(unittest.TestCase):
             self.assertTrue((out/'aria02/tracking_preview.mp4').is_file())
             receipt=json.loads((out/'replay.provenance.json').read_text())
             self.assertFalse(receipt['target_tracker_used'])
+            self.assertAlmostEqual(receipt['camera_calibration']['alignment_scales']['aria02'],.5)
