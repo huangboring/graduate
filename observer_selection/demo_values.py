@@ -10,6 +10,10 @@ KEYPOINTS = 'nose left_shoulder right_shoulder left_elbow right_elbow left_wrist
 
 def frame_value(name, value, index, length):
     """Only accept the layouts actually recorded by demo_inspect, with B=1."""
+    if not 0 <= index < length:
+        raise IndexError('Frame index outside recorded window')
+    if name == 'AvatarNet.output.egonet_pos' and value.shape == (length, 22, 3):
+        return value[index], 'B*T, joints=22, xyz=3; B=1 (flattened FK output)'
     if name.startswith('fusion.spatial_encoder.'):
         if value.ndim >= 2 and value.shape[0] == length:
             return value[index], 'B*T, tokens, [features]; B=1'
