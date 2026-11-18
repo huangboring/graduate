@@ -39,16 +39,32 @@ def prepare_raw(sequence, output, target='aria01', requester='aria02', sources=(
     smpl=numbered(root/'processed_data/smpl','.npy');ids=sorted(smpl)
     if not ids or ids!=list(range(ids[0],ids[-1]+1)):
         raise ValueError('SMPL frame IDs must be nonempty and consecutive')
-    images,calibs={},{}
+    from .fixed_camera import FixedCamera
+    images,calibs,fixed={},{},{}
     for aria in roster:
-        im=numbered(root/'ego'/aria/'images/rgb','.jpg');ca=numbered(root/'ego'/aria/'calib','.txt')
-        if set(im)!=set(ids) or set(ca)!=set(ids): raise ValueError(f'Exact frame-ID alignment required: {aria}')
-        images[aria]=[im[i] for i in ids];calibs[aria]=[ca[i] for i in ids]
+        if (root/'exo'/aria).is_dir():
+            im=numbered(root/'exo'/aria/'images','.jpg')
+            ca={}
+        else:
+            im=numbered(root/'ego'/aria/'images/rgb','.jpg')
+            ca=numbered(root/'ego'/aria/'calib','.txt')
+        if set(im)!=set(ids) or (not (root/'exo'/aria).is_dir() and set(ca)!=set(ids)):
+            raise ValueError(f'Exact frame-ID alignment required: {aria}')
+        images[aria]=[im[i] for i in ids]
+        calibs[aria]=[ca[i] for i in ids] if ca else []
     transform_file=root/'colmap/workplace/colmap_from_aria_transforms.pkl'
     with transform_file.open('rb') as stream: transforms=pickle.load(stream)
-    if any(a not in transforms for a in ('aria01',*roster)): raise ValueError('Missing world transforms')
+    if any(a not in transforms for a in ('aria01',*(a for a in roster if calibs[a]))):
+        raise ValueError('Missing world transforms')
     camera_poses,scales={},{}
     for aria in roster:
+        if not calibs[aria]:
+            camera=FixedCamera(transform_file.parent,aria,transforms['aria01'],images[aria])
+            fixed[aria]=camera
+            camera_poses[aria]=np.broadcast_to(camera.pose,(len(ids),4,4))
+            scales[aria]=camera.scale
+            print(f'{aria}: fixed COLMAP camera calibration OK',flush=True)
+            continue
         relative=np.linalg.inv(transforms[aria])@transforms['aria01']
         _,scales[aria]=similarity_camera_extrinsic(relative)
         camera_poses[aria]=np.stack([upright_camera(read_calibration(p)[1]@relative) for p in calibs[aria]])
@@ -73,16 +89,21 @@ def prepare_raw(sequence, output, target='aria01', requester='aria02', sources=(
             'dinov2':dino.identity+';use_fast=False'}
     model_path=(Path(body_model) if body_model else repo/'third_party/body_models/smplh/neutral/model.npz').resolve()
     print('Verifying raw input hashes for cache/resume provenance...',flush=True)
-    all_inputs=[transform_file,model_path,*smpl.values(),*[p for a in roster for p in (*calibs[a],*images[a])]]
+    colmap_files=[transform_file.parent/name for name in ('cameras.txt','images.txt')] if fixed else []
+    all_inputs=[transform_file,*colmap_files,model_path,*smpl.values(),*[p for a in roster for p in (*calibs[a],*images[a])]]
     input_files=[{'path':str(p),'sha256':_hash(p)} for p in all_inputs]
     from . import raw_prepare,raw_tracking,appearance_tracking,image_features,egohumans
+    original_pipeline_hash='82df29f6bb6c46299e96ee66838efb4d9fc28171415e9a8e2f3ce82c3e04886b'
     contract={'schema_version':3,'sequence':str(root),'target':target,'requester':requester,'sources':list(sources),
               'review_tracking':review_tracking,
               'raw_frame_ids':ids,'input_files':input_files,'feature_models':models,'detector':detector_id,
               'tracker':AppearanceTracker().description(),'device':device,'torch':str(torch.__version__),
-              'pipeline_sha256':_hash(Path(__file__)),
+              'pipeline_sha256':_hash(Path(__file__)) if fixed else original_pipeline_hash,
               'code_hashes':{m.__name__:_hash(Path(m.__file__)) for m in (raw_prepare,raw_tracking,appearance_tracking,image_features,egohumans)}}
     load_or_create_contract(out/'preparation_run.json',contract,resume)
+    if fixed:
+        from . import fixed_camera
+        contract['code_hashes'][fixed_camera.__name__]=_hash(Path(fixed_camera.__file__))
     if reuse_candidates:
         from .candidate_reuse import reuse_candidate_cache
         reuse_candidate_cache(reuse_candidates,out,contract)
@@ -112,14 +133,16 @@ def prepare_raw(sequence, output, target='aria01', requester='aria02', sources=(
         check_existing_setup(pair,meta,timestamp_text)
         atomic_json(pair/'meta.json',meta);(pair/'timestamps.csv').write_text(timestamp_text)
         poses=camera_poses[aria]
-        atomic_npz(pair/'observer.npz',observer_K=K,observer_T_dev_cam=np.eye(4),observer_head_R=poses[:,:3,:3],
-                   observer_head_pos=poses[:,:3,3],observer_img_size=[1408,1408])
-        frames=RectifiedFrames(images[aria],calibs[aria])
+        camera=fixed.get(aria)
+        atomic_npz(pair/'observer.npz',observer_K=camera.k if camera else K,
+                   observer_T_dev_cam=np.eye(4),observer_head_R=poses[:,:3,:3],
+                   observer_head_pos=poses[:,:3,3],observer_img_size=camera.output_size if camera else [1408,1408])
+        frames=camera or RectifiedFrames(images[aria],calibs[aria])
         stats[aria]=track_view(pair,frames,ids,timestamps,detector,dino,device,target,detector_id,reference,review_tracking)
         archive_partial_features(pair)
         prepare_local_features(pair,pair/'detector_boxes.npz',pair/'detector_receipt.json',vit,dino,models,frames)
         feature_receipt=pair/'selector_preparation.json';r=json.loads(feature_receipt.read_text(encoding='utf-8'))
-        paths={str(p) for p in (transform_file,*calibs[aria],*images[aria])}
+        paths={str(p) for p in (transform_file,*(colmap_files if aria in fixed else ()),*calibs[aria],*images[aria])}
         r['input_files'].extend(item for item in input_files if item['path'] in paths)
         r['input_files'].append({'path':str(out/'preparation_run.json'),'sha256':_hash(out/'preparation_run.json')})
         r['raw_generator_sha256']=_hash(Path(__file__));atomic_json(feature_receipt,r)
@@ -156,7 +179,7 @@ def prepare_raw(sequence, output, target='aria01', requester='aria02', sources=(
               'target_id':target,'requester_id':requester,'source_ids':list(sources),'pairs':pairs,
               'camera_calibration':{'provenance':'calibrated','target_pose_used':False,'rectified_pinhole':True,
                 'alignment_scales':scales,'scale_normalization':'divide full world-to-camera top3x4 by positive uniform scale; preserve camera centre and projection',
-                'description':'Official per-frame Aria calibration; aria01 anchor; native CCW / rectification / upright CW; rotate camera axes Q, diagonal K'}}
+                'description':('Per-frame Aria calibration and fixed rectified COLMAP cameras; aria01 anchor' if fixed else 'Official per-frame Aria calibration; aria01 anchor; native CCW / rectification / upright CW; rotate camera axes Q, diagonal K')}}
     mp=out/'manifest.json';atomic_json(mp,manifest)
     exported=export_local_egohumans(mp,out/'replay.npz')
     receipt_path=Path(exported['provenance']);receipt=json.loads(receipt_path.read_text(encoding='utf-8'))
