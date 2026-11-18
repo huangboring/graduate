@@ -18,33 +18,37 @@ from .single_exo import SingleExo
 from .triangulation import _camera, camera_geometry, triangulate_views
 
 
-def choose(scores, candidates, required, budget, mode, rng):
-    """One fixed batch before acquisition. Sample individual actions with STOP."""
+def choose(scores, local_score, candidates, required, mode, rng):
     free = [i for i, source in enumerate(candidates) if source not in required]
-    chosen = list(required)
-    if mode == 'all':
-        return candidates, None
-    if mode == 'local':
-        return (), None
-    terms = []
+    if not free:
+        return tuple(required), None
+    margins = scores[free] - local_score
     if mode == 'sample':
-        while free and len(chosen) < budget:
-            logits = torch.cat((scores[free], scores.new_zeros(1)))
-            log_probs = torch.log_softmax(logits, dim=0)
-            action = rng.choices(range(len(logits)), weights=log_probs.detach().exp().cpu().tolist())[0]
-            terms.append(log_probs[action])
-            if action == len(free):
-                break
-            chosen.append(candidates[free.pop(action)])
+        # Each source competes with the same local-only option.
+        probabilities = margins.detach().sigmoid().cpu().tolist()
+        draws = [rng.random() < probability for probability in probabilities]
+        included = torch.as_tensor(draws,device=margins.device,dtype=margins.dtype)
+        logp = -torch.nn.functional.binary_cross_entropy_with_logits(margins,included,reduction='sum')
     else:
-        ranked = sorted(free, key=lambda i: (-float(scores[i]), candidates[i]))
-        chosen.extend(candidates[i] for i in ranked[:budget-len(chosen)] if float(scores[i]) > 0)
-    return tuple(s for s in candidates if s in chosen), torch.stack(terms).sum() if terms else None
+        draws = (margins.detach()>0).cpu().tolist()
+        logp = None
+    selected = set(required)
+    selected.update(candidates[i] for i, chosen in zip(free, draws) if chosen)
+    return tuple(source for source in candidates if source in selected), logp
+
+
+def matched_random(candidates, learned, rng):
+    refresh = set(learned['refresh'])
+    available = [source for source in candidates if source not in refresh]
+    selected = refresh | set(rng.sample(available,len(learned['selected'])-len(refresh)))
+    return tuple(source for source in candidates if source in selected)
 
 
 class AppearanceSelector(SelectorNetwork):
     def __init__(self):
         super().__init__(13)
+        self.local_scorer = torch.nn.Sequential(torch.nn.Linear(2*self.hidden,self.hidden),
+                                               torch.nn.GELU(),torch.nn.Linear(self.hidden,1))
         self.appearance = torch.nn.Sequential(torch.nn.Linear(768,32), torch.nn.LayerNorm(32))
         self.demand_encoder = self._encoder(11*self.joints+5+32,self.hidden)
         self.observation_encoder = self._encoder(5*self.joints+1+32,self.hidden)
@@ -60,6 +64,10 @@ class AppearanceSelector(SelectorNetwork):
         tensors = (self._tensor(features,11*self.joints+5,'demand'),
                    self._appearance(observation.backend_context,'local_dino_cls'))
         return self.demand_encoder(torch.cat(tensors))
+
+    def local_score(self, demand, observation, previous):
+        current = self.demand(observation,previous)
+        return self.local_scorer(torch.cat((demand,current))).squeeze(-1)
 
     def update(self, packet, old_h, last_timestamp=None):
         features = packet_features(packet,last_timestamp,self.joints)
@@ -98,37 +106,43 @@ class Rollout:
             self.last[source] = now
         return packets
 
-    def step(self, frame, index, mode, count=None):
+    def step(self, frame, index, mode, matched=None):
         obs = frame.observation
         now = obs.timestamp
         self.local.append(obs)
-        if mode in ('all','local'):
-            selected, logp = choose(None, self.candidates, (), 0, mode, self.rng)
+        logp = None
+        required = ()
+        if mode == 'all':
+            selected = self.candidates
+        elif mode == 'local':
+            selected = ()
         elif mode == 'random':
-            selected = tuple(self.rng.sample(self.candidates,count))
-            logp = None
+            required = tuple(matched['refresh'])
+            selected = matched_random(self.candidates,matched,self.rng)
         else:
-            demand = self.selector.demand_sequence(list(self.local))
+            local = list(self.local)
+            demand = self.selector.demand_sequence(local)
+            local_score = self.selector.local_score(demand,obs,local[-2] if len(local)>1 else None)
             refresh = plan_refresh(self.candidates, now, self.first, self.last, self.config)
+            required = refresh.required_ids
             scores = []
             for source in self.candidates:
                 geo = camera_geometry(_camera(obs), self.cameras[source], self.last[source],
                     source in self.fixed, now, self.widths[self.raw], self.widths[source])
                 scores.append(self.selector.score(demand, self.memory[source], geometry_features(geo, now),
                     now-self.last[source], True))
-            selected, logp = choose(torch.stack(scores), self.candidates, refresh.required_ids,
-                                    min(self.config.max_sources,len(self.candidates)), mode, self.rng)
+            selected, logp = choose(torch.stack(scores),local_score,self.candidates,required,mode,self.rng)
         packets = self._accept(frame, selected)
         views = (obs, *packets)
         confidences = [self.model.confidence(view) for view in views]
         points, state = triangulate_views(views, self.head[index], self.rotations[index], confidences)
-        return points, state, selected, logp
+        return points, state, selected, logp, required
 
     def detach(self):
         self.memory = {source: state.detach() for source,state in self.memory.items()}
 
 
-def _run(data, model, selector, config, mode, seed, windows, optimiser=None, cost=.005, counts=None):
+def _run(data, model, selector, config, mode, seed, windows, optimiser=None, cost=.005, match_rows=None):
     frames, ids, widths, fixed, raw, sparse, truth, rotations = data
     results = []
     all_predictions, all_states = [], []
@@ -137,9 +151,9 @@ def _run(data, model, selector, config, mode, seed, windows, optimiser=None, cos
     running = None
     for start in range(0, windows*model.window, model.window):
         stop = start+model.window
-        rows = [rollout.step(frames[i],i,mode,counts[i-1] if counts is not None else None)
+        rows = [rollout.step(frames[i],i,mode,match_rows[i-1] if match_rows is not None else None)
                 for i in range(start+1,stop+1)]
-        points, states, selected, logps = zip(*rows)
+        points, states, selected, logps, refresh = zip(*rows)
         states = np.stack(states)
         valid = (states!=0).any(axis=1)
         floor = truth[start+1:stop+1,[10,11],2].min()
@@ -165,14 +179,14 @@ def _run(data, model, selector, config, mode, seed, windows, optimiser=None, cos
             rollout.detach()
         all_predictions.extend(predicted.detach().cpu().numpy())
         all_states.extend(states)
-        for n, (names, e, st) in enumerate(zip(selected,error.detach().cpu().tolist(),states),start+1):
-            results.append({'frame':ids[n],'selected':list(names),'mpjpe_mm':e*1000,
+        for n, (names, e, st, required) in enumerate(zip(selected,error.detach().cpu().tolist(),states,refresh),start+1):
+            results.append({'frame':ids[n],'selected':list(names),'mpjpe_mm':e*1000,'refresh':list(required),
                             'triangulated_joints':int((st==2).sum())})
     return results,np.asarray(all_predictions),np.asarray(all_states)
 
 
-def train(prepared, sequence, output, repo, checkpoint, device, epochs, budget, cost, max_windows, resume, render):
-    from .selection_video import export_outputs, image_paths
+def train(prepared, sequence, output, repo, checkpoint, device, epochs, cost, max_windows, resume, render):
+    from .selection_video import export_outputs, image_paths, raw_joint_overlay
 
     torch.manual_seed(2026)
     torch.set_num_threads(min(4,torch.get_num_threads()))
@@ -211,10 +225,10 @@ def train(prepared, sequence, output, repo, checkpoint, device, epochs, budget, 
     selector = AppearanceSelector().to(device)
     optimiser = torch.optim.AdamW([*selector.parameters(),*model.adapter.parameters()],lr=3e-4)
     from .egohumans import _hash
-    config = AcquisitionConfig(max_sources=budget)
+    config = AcquisitionConfig(max_sources=len(candidates))
     contract={'prepared':str(prepared),'replay_sha256':_hash(prepared/'replay.npz'),
-              'checkpoint_sha256':_hash(checkpoint),'sequence':str(sequence),'epochs_schema':1,
-              'budget':budget,'cost_m_per_source':cost,'windows':windows,
+              'checkpoint_sha256':_hash(checkpoint),'sequence':str(sequence),'epochs_schema':2,
+              'policy':'above_local_plus_refresh','cost_m_per_source':cost,'windows':windows,
               'crop_provenance':frames[0].metadata.get('crop_provenance'),
               'scope':'training-sequence only, synthetic target trackers and reference-derived floor'}
     saved = output/'checkpoint.pt'
@@ -251,12 +265,13 @@ def train(prepared, sequence, output, repo, checkpoint, device, epochs, budget, 
         local,_,_=_run(data,model,selector,config,'local',2026,windows)
         all_views,_,_=_run(data,model,selector,config,'all',2026,windows)
         random_matched,_,_=_run(data,model,selector,config,'random',2026,windows,
-                               counts=[len(row['selected']) for row in learned])
+                               match_rows=learned)
     atomic_npz(output/'predictions.npz',raw_frame_ids=np.array(ids[1:len(learned)+1]),
                predicted=predictions,reference=truth[1:],joint_states=states)
     warmup={'frame':ids[0],'selected':list(candidates),'mpjpe_mm':None,'triangulated_joints':None}
     export_outputs(output,history,learned,local,all_views,warmup,candidates,raw,predictions,images,
                    random_matched=random_matched,
+                   joints_for=raw_joint_overlay(sequence,images,ids,frames,raw,fixed) if images else None,
                    omitted_frames=len(ids)-len(learned)-1)
 
 
@@ -268,15 +283,14 @@ def main():
     parser.add_argument('--checkpoint')
     parser.add_argument('--device',choices=('cuda','cpu'),default='cuda')
     parser.add_argument('--epochs',type=int,default=8)
-    parser.add_argument('--budget',type=int,default=2)
     parser.add_argument('--cost',type=float,default=.005,help='Cost in MPJPE metres per extra request')
     parser.add_argument('--max-windows',type=int)
     parser.add_argument('--resume',action='store_true')
     parser.add_argument('--no-video',action='store_false',dest='render')
     args=parser.parse_args()
-    if args.epochs<1 or args.budget<1 or not math.isfinite(args.cost) or args.cost<0 or (
+    if args.epochs<1 or not math.isfinite(args.cost) or args.cost<0 or (
             args.max_windows is not None and args.max_windows<1):
-        parser.error('Positive epochs/budget/windows and finite nonnegative cost required')
+        parser.error('Positive epochs/windows and finite nonnegative cost required')
     train(**vars(args))
 
 

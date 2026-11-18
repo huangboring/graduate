@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import numpy as np
 import torch
 
-from observer_selection.fit_triangulated import AppearanceSelector, _run, choose
+from observer_selection.fit_triangulated import AppearanceSelector, _run, choose, matched_random
 from observer_selection.official_demo import module_from_file
 from observer_selection.selection_video import export_outputs
 from observer_selection.single_exo import SingleExo
@@ -42,15 +42,20 @@ class TriangulatedPipelineTest(unittest.TestCase):
         np.testing.assert_allclose(points[0],point-head,atol=1e-6)
         self.assertFalse(np.allclose(points[1],points[0]))
 
-    def test_stop_action_and_mandatory_refresh(self):
-        scores=torch.tensor([-2.,-1.,2.])
-        self.assertEqual(choose(scores,('C','D','E'),(),2,'learned',None)[0],('E',))
-        self.assertEqual(choose(-torch.ones(3),('C','D','E'),(),2,'learned',None)[0],())
-        self.assertEqual(choose(scores,('C','D','E'),('D',),1,'learned',None)[0],('D',))
-        logits=torch.ones(3,requires_grad=True)
-        _, logp=choose(logits,('C','D','E'),(),2,'sample',random.Random(1))
+    def test_local_threshold_and_mandatory_refresh(self):
+        cameras=('C','D','E','F','G')
+        scores=torch.tensor([.9,.8,.7,.6,.4],requires_grad=True)
+        local=torch.tensor(.6,requires_grad=True)
+        self.assertEqual(choose(scores,local,cameras,('G',),'learned',None)[0],('C','D','E','G'))
+        self.assertEqual(choose(scores,torch.tensor(1.),cameras,(),'learned',None)[0],())
+        _, logp=choose(scores,local,cameras,('G',),'sample',random.Random(1))
         logp.backward()
-        self.assertTrue(torch.isfinite(logits.grad).all())
+        self.assertTrue(torch.isfinite(scores.grad).all())
+        self.assertEqual(float(scores.grad[-1]),0.)
+        self.assertNotEqual(float(local.grad),0.)
+        selected=matched_random(cameras,{'selected':['C','D','G'],'refresh':['G']},random.Random(5))
+        self.assertIn('G',selected)
+        self.assertEqual(len(selected),3)
 
     def test_official_fusion_interface_gradient(self):
         repo=Path(__file__).resolve().parents[1]/'external/EgoExoMoCap'
@@ -119,7 +124,8 @@ class TriangulatedPipelineTest(unittest.TestCase):
                   {'frame':3,'mpjpe_mm':20.,'selected':[],'triangulated_joints':0}]
             warmup={'frame':1,'selected':['C','D'],'mpjpe_mm':None,'triangulated_joints':None}
             export_outputs(out,[{'epoch':1,'mpjpe_mm':25.}],rows,rows,rows,warmup,('C','D'),'A',
-                           np.zeros((2,22,3),'f4'),images,0)
+                           np.zeros((2,22,3),'f4'),images,0,
+                           joints_for=lambda source,frame: [(75,50)] if source=='D' else [])
             self.assertTrue((out/'figures/overview.png').is_file())
             reader=cv2.VideoCapture(str(out/'multiview_selection.mp4'))
             try:
@@ -127,6 +133,8 @@ class TriangulatedPipelineTest(unittest.TestCase):
                 ok,frame=reader.read()
                 self.assertTrue(ok)
                 self.assertGreater(float(frame[440,930].mean()),float(frame[440,290].mean())+75.)
+                green=frame[465:490,945:980].astype(int)
+                self.assertTrue(np.any(green[...,1]-green[...,2]>35))
             finally:
                 reader.release()
 

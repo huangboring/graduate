@@ -2,19 +2,18 @@ param(
     [string]$Python = 'D:\Ray\venvs\graduate-research\Scripts\python.exe',
     [string]$Sequence = 'data/EgoHumans/01_tagging/001_tagging',
     [string]$Prepared = 'data/prepared/tagging001_triangulated_annotated',
-    [string]$Run = 'runs/tagging001_triangulated_annotated',
+    [string]$Run = 'runs/tagging001_triangulated_adaptive',
     [string]$Repo = 'external/EgoExoMoCap',
     [string[]]$Sources = @('aria03','aria04','cam01','cam02','cam03'),
     [string]$ModelCache = 'data/prepared/tagging001_v2/model_cache',
     [int]$Epochs = 8,
-    [int]$Budget = 2,
     [switch]$PreparedOnly,
     [switch]$SkipPrepare,
     [switch]$TrackBoxes
 )
 
 $ErrorActionPreference = 'Stop'
-if ($Epochs -lt 1 -or $Budget -lt 1) { throw 'Epochs and budget must be positive.' }
+if ($Epochs -lt 1) { throw 'Epochs must be positive.' }
 
 function Invoke-Python {
     & $Python @args
@@ -46,7 +45,7 @@ try {
     if ($PreparedOnly) { return }
 
     $common = @('-m','observer_selection.fit_triangulated','--sequence',$Sequence,'--prepared',$Prepared,
-                '--repo',$Repo,'--budget',"$Budget",'--device','cuda')
+                '--repo',$Repo,'--device','cuda')
     $smoke = $Run + '_smoke'
     if (!(Test-Path -LiteralPath (Join-Path $smoke 'metrics.json'))) {
         $smokeArgs = $common + @('--output',$smoke,'--epochs','1','--max-windows','1','--no-video')
