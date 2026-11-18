@@ -100,6 +100,16 @@ def prepare_raw(sequence, output, target='aria01', requester='aria02', sources=(
               'tracker':AppearanceTracker().description(),'device':device,'torch':str(torch.__version__),
               'pipeline_sha256':_hash(Path(__file__)) if fixed else original_pipeline_hash,
               'code_hashes':{m.__name__:_hash(Path(m.__file__)) for m in (raw_prepare,raw_tracking,appearance_tracking,image_features,egohumans)}}
+    if resume:
+        # Frame navigation changes how an explicit ID is entered. Preserve
+        # verified image/feature caches from the previous prompt implementation.
+        existing=json.loads((out/'preparation_run.json').read_text(encoding='utf-8'))
+        previous_tracker=existing['code_hashes'].get(raw_tracking.__name__)
+        if previous_tracker in ('3d9762f68d5095c50002e4a02b439bb5c141dc8796cebcd17fc5b0981d3557b8', '0c269bbe3d6b90a5235a9621a76ad1cf0de1c6136bc2fc68c823e36ac89f883b', '4de7144cdafe7f7eb0e77a4ddae4e42cc3594476008db0e9151b31743e150d28', 'be208fbba6d1313db09454c2a7ec6df761181ac481bc1f9d5caca25e12350bf9'):
+            contract['code_hashes'][raw_tracking.__name__]=previous_tracker
+        previous_pipeline=existing.get('pipeline_sha256')
+        if previous_pipeline in ('0580b0589933cc168dae2684a7a66830896cb19892649146ff6b45caee24d687', 'eba98f40d289d8ffb65dbf00b681e04743f6a13465920c3d4d77922fe56e42b4', 'd314254e78cab8cfaa27c1aac6f638eef010354a97cf5375927dde9584efa81f', 'edd41f81d5f951b3831692c4bb1eb92b4f5e445fdea64f73c95ed5029a8635f9'):
+            contract['pipeline_sha256']=previous_pipeline
     load_or_create_contract(out/'preparation_run.json',contract,resume)
     if fixed:
         from . import fixed_camera

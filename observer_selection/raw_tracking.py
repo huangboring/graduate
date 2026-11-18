@@ -41,14 +41,14 @@ def extract_candidates(image, detector, dino, device):
     return boxes,features
 
 
-def initial_choice(pair, raw_id, candidates, annotated, image, target, choices, reference_image=None, recovery=False):
+def initial_choice(pair, raw_id, candidates, annotated, image, target, choices, reference_image=None, recovery=False, future_ids=(), requested_box=None):
     import cv2
     key=str(raw_id)
     if key in choices:
         event=choices[key]
         if event['candidate_boxes']!=candidates.tolist():
             raise ValueError('Cached identity decision no longer matches detector candidates')
-        return event['choice']
+        return (event['jump_to'],event.get('requested_box')) if 'jump_to' in event else event['choice']
     display=cv2.resize(annotated,(704,704))
     if reference_image is not None and Path(reference_image).is_file():
         reference=cv2.imread(str(reference_image))
@@ -63,17 +63,40 @@ def initial_choice(pair, raw_id, candidates, annotated, image, target, choices, 
     cv2.imwrite(str(pair/'identity_current.jpg'),display)
     print(f'\nOpen {file}\nIdentify the SAME target {target}. Numbers are detection indices, NOT Aria IDs.\n'
           + ('RECOVERY/REVIEW: this is an additional manual identity annotation.\n' if recovery else '')
-          + 'Enter its box number; n=no matching box (retry after 20 frames); q=save cache and stop.',flush=True)
-    while True:
-        answer=input('Target box: ').strip().lower()
-        if answer=='q': raise KeyboardInterrupt('Cache saved. Resume the same command with --resume.')
-        if answer=='n': selected=None;break
-        if answer.isdecimal() and int(answer)<len(candidates): selected=int(answer);break
-        print('Enter a displayed box number, n, or q.',flush=True)
+          + ('Enter the box number, n, or q.' if recovery else
+             'Enter the box number, FRAME:BOX (e.g. 8:2), f FRAME (to inspect), n (+20), or q.'),flush=True)
+    jump = None
+    if requested_box is not None and requested_box < len(candidates):
+        print(f'Using requested box {requested_box} at raw frame {raw_id}.',flush=True)
+        selected = requested_box
+    else:
+        if requested_box is not None:
+            print(f'Box {requested_box} does not exist on raw frame {raw_id}.',flush=True)
+        while True:
+            answer=input('Target box: ').strip().lower()
+            if answer=='q': raise KeyboardInterrupt('Cache saved. Resume the same command with --resume.')
+            if answer=='n': selected=None;break
+            if answer.isdecimal() and int(answer)<len(candidates): selected=int(answer);break
+            if not recovery and (answer.startswith('f ') or ':' in answer):
+                parts=answer[2:].strip().split(':') if answer.startswith('f ') else answer.split(':')
+                if len(parts) in (1,2) and all(part.strip().isdecimal() for part in parts):
+                    frame=int(parts[0])
+                    if frame in future_ids:
+                        jump=frame
+                        requested_box=int(parts[1]) if len(parts)==2 else None
+                        selected=None
+                        break
+                    if len(parts)==2 or answer.startswith('f '):
+                        print('Use a later raw frame in this sequence.',flush=True)
+                        continue
+            print('Enter a displayed box number, FRAME:BOX, f FRAME, n, or q.' if not recovery
+                  else 'Enter a displayed box number, n, or q.',flush=True)
     choices[key]={'choice':selected,'candidate_boxes':candidates.tolist(),
                   'identity_source':'manual_recovery_review' if recovery else 'manual_initial_identity','raw_frame_id':raw_id}
+    if jump is not None:
+        choices[key].update(jump_to=jump,requested_box=requested_box)
     atomic_json(pair/('recovery_choices.json' if recovery else 'identity_choices.json'),choices)
-    return selected
+    return (jump,requested_box) if jump is not None else selected
 
 
 def track_view(pair, frames, ids, timestamps, detector, dino, device, target, checkpoint_id, reference_image=None, review_tracking=False):
@@ -84,6 +107,7 @@ def track_view(pair, frames, ids, timestamps, detector, dino, device, target, ch
     tracker=AppearanceTracker()
     T=len(ids);boxes=np.zeros((T,4),'f4');valid=np.zeros(T,bool)
     next_prompt=0;init_record=None;reasons=[];cache_hits=0
+    jump_id=requested_box=None
     recovery_choices_path=pair/'recovery_choices.json'
     recovery_choices=json.loads(recovery_choices_path.read_text()) if recovery_choices_path.exists() else {}
     misses=0;last_review=-1;manual_reviews=0;automatic_recoveries=0;diagnostics=[]
@@ -94,7 +118,9 @@ def track_view(pair, frames, ids, timestamps, detector, dino, device, target, ch
         for t,raw_id in enumerate(ids):
             image=frames.get(t)
             candidate_file=cache/f'{raw_id:05}.npz'
-            if candidate_file.exists():
+            if jump_id is not None and raw_id<jump_id:
+                candidates,features=np.empty((0,4),'f4'),np.empty((0,768),'f4')
+            elif candidate_file.exists():
                 candidates,features=load_candidates(candidate_file);cache_hits+=1
             else:
                 candidates,features=extract_candidates(image,detector,dino,device)
@@ -105,10 +131,16 @@ def track_view(pair, frames, ids, timestamps, detector, dino, device, target, ch
                 cv2.putText(display,str(i),(a,max(20,b)),cv2.FONT_HERSHEY_SIMPLEX,1.2,(0,0,255),3)
             selected=None
             if not tracker.initialized and init_record is None:
-                if len(candidates) and t>=next_prompt:
-                    selected=initial_choice(pair,raw_id,candidates,display,image,target,choices,reference_image)
-                    if selected is None: next_prompt=t+20
+                if raw_id==jump_id or (jump_id is None and len(candidates) and t>=next_prompt):
+                    result=initial_choice(pair,raw_id,candidates,display,image,target,choices,reference_image,
+                                          future_ids=ids[t+1:],requested_box=requested_box)
+                    jump_id=requested_box=None
+                    if isinstance(result,tuple):
+                        jump_id,requested_box=result
+                    elif result is None:
+                        next_prompt=t+20
                     else:
+                        selected=result
                         tracker.initialize(t,candidates[selected],features[selected])
                         init_record={'raw_frame_id':raw_id,'box_index':selected,'bbox':candidates[selected].tolist()}
                         a,b,c,d=map(int,candidates[selected]);cv2.rectangle(display,(a,b),(c,d),(0,255,0),4)

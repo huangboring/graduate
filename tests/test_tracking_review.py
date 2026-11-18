@@ -43,6 +43,26 @@ class TrackingReviewTests(unittest.TestCase):
                 repeated=track_view(*args,review_tracking=True)
             self.assertEqual(result['valid_frames'],repeated['valid_frames'])
 
+    def test_jump_to_raw_frame_and_reuse_choice(self):
+        for inputs in (['4:1'],['f 4','1']):
+            with self.subTest(inputs=inputs), tempfile.TemporaryDirectory() as temp:
+                root=Path(temp);(root/'frame_cache').mkdir()
+                boxes=np.array([[1,1,8,8],[10,10,19,19]],'f4')
+                features=np.eye(2,768,dtype='f4')
+                for i in (1,4,5):
+                    atomic_npz(root/f'frame_cache/{i:05}.npz',boxes=boxes,features=features)
+                frames=SimpleNamespace(get=lambda t:np.zeros((20,20,3),np.uint8))
+                args=(root,frames,list(range(1,6)),np.arange(5),None,
+                      SimpleNamespace(identity='FAKE'),'cpu','aria01','FAKE')
+                for answers in (inputs,AssertionError('Must reuse saved jump')):
+                    with patch('builtins.input',side_effect=answers):
+                        track_view(*args)
+                    with np.load(root/'detector_boxes.npz') as z:
+                        np.testing.assert_array_equal(z['bbox_valid'],[0,0,0,1,1])
+                        np.testing.assert_array_equal(z['bbox'][3],boxes[1])
+                self.assertFalse((root/'frame_cache/00002.npz').exists())
+                self.assertTrue((root/'identity_frame_00004.jpg').exists())
+
     def test_cache_import_excludes_identity_and_rejects_changed_inputs(self):
         with tempfile.TemporaryDirectory() as temp:
             root=Path(temp);old=root/'old';new=root/'new'
