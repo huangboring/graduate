@@ -7,6 +7,8 @@ import torch
 import yaml
 
 from .official_demo import module_from_file, strict_weights
+from .triangulation import _camera
+from .types import Observation
 
 
 class SingleExo:
@@ -19,7 +21,7 @@ class SingleExo:
                 raise FileNotFoundError(path)
         sys.path[:0] = [str(repo), str(repo/'data_prep/shared')]
         from human_body_prior.body_model.body_model import BodyModel
-        from data_loaders.dataset_nymeria import _build_sparse
+        from data_loaders.dataset_nymeria import _build_sparse, _compute_exo_rays
         from models.model_egoexomocap import ModelEgoExoMoCap
         from utils.utils_transform import sixd2aa
 
@@ -32,6 +34,7 @@ class SingleExo:
         strict_weights(self.net, checkpoint)
         self.fk, self.body, self.sixd2aa = model.fk, model.bm, sixd2aa
         self.build_sparse = _build_sparse
+        self.compute_exo_rays = _compute_exo_rays
         self.body_for_tracking = BodyModel(bm_fname=str(body), num_betas=10).to(device).eval()
         self.repo, self.device = repo, device
         self.window = int(opt['datasets']['test']['window_size'])
@@ -95,3 +98,30 @@ class SingleExo:
         body = self.sixd2aa(f.joint_rotation_decoder(temporal).reshape(-1,6)).reshape(self.window,63)
         joints = self.body(root_orient=root, pose_body=body).Jtr[:,:22]
         return joints - joints[:,15:16] + head[:,None]
+
+
+    @torch.no_grad()
+    def reconstruct_original(self, sparse, head, rotations, views, floor):
+        rays, descriptors, flags = [], [], []
+        for stream in views:
+            cameras, intrinsics = zip(*map(_camera,stream))
+            cameras = np.stack(cameras)
+            if not np.allclose(intrinsics,intrinsics[0]):
+                raise ValueError('The official Exo ray loader requires constant rectified intrinsics per view')
+            valid = np.array([v.valid.any() for v in stream])
+            rays.append(self.compute_exo_rays(np.stack([v.xy for v in stream]),intrinsics[0],
+                np.eye(4),cameras[:,:3,3],cameras[:,:3,:3],head,rotations,valid))
+            descriptors.append(np.stack([
+                v.backend_context['local_dino_cls'] if isinstance(v,Observation) else v.payload['dino_cls']
+                for v in stream]))
+            flags.append(valid)
+        x = torch.as_tensor(sparse,device=self.device).unsqueeze(0).clone()
+        x[..., [38,41,44]] -= float(floor)
+        data = {'sparse_input':x, 'fk':self.fk, 'body_model':self.body, 'betas':None}
+        for name,value in (('exo_rays',rays),('dino_cls',descriptors),('bbox_valid',flags)):
+            data[name] = torch.as_tensor(np.stack(value,axis=1),device=self.device).unsqueeze(0)
+        out = self.net(data)
+        root = self.sixd2aa(out['root_orient'].reshape(-1,6))
+        body = self.sixd2aa(out['pose_body'].reshape(-1,6)).reshape(self.window,63)
+        joints = self.body(root_orient=root,pose_body=body).Jtr[:,:22]
+        return joints-joints[:,15:16]+torch.as_tensor(head,device=self.device)[:,None]

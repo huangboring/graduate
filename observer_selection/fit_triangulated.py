@@ -185,7 +185,48 @@ def _run(data, model, selector, config, mode, seed, windows, optimiser=None, cos
     return results,np.asarray(all_predictions),np.asarray(all_states)
 
 
-def train(prepared, sequence, output, repo, checkpoint, device, epochs, cost, max_windows, resume, render):
+
+@torch.no_grad()
+def compare_original_fusion(data, model, selector, config, windows, output):
+    import csv
+
+    frames, ids, _, _, requester, sparse, truth, rotations = data
+    _, triangulated, _ = _run(data,model,selector,config,'all',2026,windows)
+    head = truth[:,15]
+    original = []
+    for start in range(0,windows*model.window,model.window):
+        stop=start+model.window
+        chunk=frames[start+1:stop+1]
+        views=[[f.observation for f in chunk]]
+        views.extend([f.packets[source] for f in chunk] for source in chunk[0].candidates)
+        floor=truth[start+1:stop+1,[10,11],2].min()
+        joints=model.reconstruct_original(sparse[start:stop],head[start+1:stop+1],
+                                          rotations[start+1:stop+1],views,floor)
+        original.append(joints.cpu().numpy())
+    original = np.concatenate(original)
+    reference = truth[1:]
+    errors = np.stack([np.linalg.norm(x-reference,axis=-1).mean(axis=-1)*1000
+                       for x in (original,triangulated)],axis=1)
+    if not np.isfinite(errors).all():
+        raise FloatingPointError('Nonfinite result in fusion comparison')
+    frame_ids = ids[1:1+len(reference)]
+    result = {
+        'scope':'IN-SAMPLE, same observations, DINOv2 substituted for DINOv3',
+        'raw_frame_range':[frame_ids[0],frame_ids[-1]],
+        'frames':len(frame_ids),
+        'view_ids':[requester,*frames[0].candidates],
+        'methods':{'EgoExoMoCap original fusion (DINOv2)':float(errors[:,0].mean()),
+                   'Triangulation + single Exo token':float(errors[:,1].mean())},
+        'unit':'MPJPE mm',
+    }
+    with (output/'fusion_comparison.csv').open('w',encoding='utf-8',newline='') as stream:
+        writer=csv.writer(stream)
+        writer.writerow(['raw_frame','original_mpjpe_mm','triangulation_mpjpe_mm'])
+        writer.writerows(zip(frame_ids,*errors.T))
+    atomic_json(output/'fusion_comparison.json',result)
+    print(json.dumps(result,indent=2),flush=True)
+
+def train(prepared, sequence, output, repo, checkpoint, device, epochs, cost, max_windows, resume, render, compare_original=False):
     from .selection_video import export_outputs, image_paths, raw_joint_overlay
 
     torch.manual_seed(2026)
@@ -215,7 +256,7 @@ def train(prepared, sequence, output, repo, checkpoint, device, epochs, cost, ma
     if len(frames)!=len(ids) or ids!=list(range(ids[0],ids[0]+len(ids))):
         raise ValueError('Prepared replay and raw frame IDs must align and be consecutive')
     fixed = {source for source in candidates if (sequence/'exo'/source).is_dir()}
-    images = image_paths(sequence,(raw,*candidates),ids) if render else {}
+    images = image_paths(sequence,(raw,*candidates),ids) if render and not compare_original else {}
     model = SingleExo(repo,checkpoint,device)
     windows = min((len(frames)-1)//model.window,max_windows or len(frames))
     if windows<1:
@@ -246,6 +287,11 @@ def train(prepared, sequence, output, repo, checkpoint, device, epochs, cost, ma
             start,history=state['epoch'],state['history']
     elif output.exists() and any(output.iterdir()):
         raise FileExistsError('Choose a fresh output or use --resume')
+    if compare_original:
+        if not resume or not saved.is_file():
+            raise ValueError('Use --resume with a trained run containing checkpoint.pt')
+        compare_original_fusion(data,model,selector,config,windows,output)
+        return
     output.mkdir(parents=True,exist_ok=True)
     atomic_json(output/'experiment.json',contract)
     atomic_json(output/'preparation_quality.json',quality)
@@ -286,6 +332,7 @@ def main():
     parser.add_argument('--cost',type=float,default=.005,help='Cost in MPJPE metres per extra request')
     parser.add_argument('--max-windows',type=int)
     parser.add_argument('--resume',action='store_true')
+    parser.add_argument('--compare-original',action='store_true',help='Evaluate trained run and original fusion on the same all-view inputs')
     parser.add_argument('--no-video',action='store_false',dest='render')
     args=parser.parse_args()
     if args.epochs<1 or not math.isfinite(args.cost) or args.cost<0 or (

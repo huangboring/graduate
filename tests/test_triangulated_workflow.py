@@ -81,6 +81,36 @@ class TriangulatedPipelineTest(unittest.TestCase):
         result.square().mean().backward()
         self.assertGreater(float(runner.adapter.weight.grad.abs().sum()),0.)
 
+    def test_original_comparison_sends_separate_tokens_and_validity_to_official_net(self):
+        from dataclasses import replace
+
+        runner=SingleExo.__new__(SingleExo)
+        runner.device,runner.window='cpu',2
+        point=np.array([0.,0.,4.])
+        a=view(np.zeros(3),point)
+        data={**a.backend_context,'local_dino_cls':np.ones(768,'f4')}
+        first=replace(a,backend_context=data)
+        missing=replace(first,valid=np.zeros(13,bool))
+        payload={'camera_to_world':data['local_camera_to_world'],'intrinsics':data['local_intrinsics'],
+                 'dino_cls':np.ones(768,'f4')}
+        other=Packet('C','T',1.,a.xy,a.valid,a.bbox,a.confidence,payload)
+        runner.compute_exo_rays=lambda xy,*args:np.ones((len(xy),39),'f4')
+        runner.fk=None
+        runner.sixd2aa=lambda x:x[:,:3]
+        runner.body=lambda **kwargs:SimpleNamespace(Jtr=torch.zeros(2,22,3))
+
+        def official(batch):
+            self.assertEqual(batch['exo_rays'].shape,(1,2,2,39))
+            self.assertEqual(batch['dino_cls'].shape,(1,2,2,768))
+            self.assertEqual(batch['bbox_valid'][0].tolist(),[[True,True],[False,True]])
+            self.assertAlmostEqual(float(batch['sparse_input'][0,0,38]),-1.)
+            return {'root_orient':torch.zeros(1,2,6),'pose_body':torch.zeros(1,2,126)}
+
+        runner.net=official
+        result=runner.reconstruct_original(np.zeros((2,54),'f4'),np.zeros((2,3),'f4'),
+                            np.tile(np.eye(3),(2,1,1)),[[first,missing],[other,other]],1.)
+        self.assertEqual(result.shape,(2,22,3))
+
     def test_two_training_windows_with_memory_and_one_token(self):
         from dataclasses import replace
         points=np.array([0.,0.,4.])
