@@ -51,8 +51,9 @@ def verify_completed_view(pair):
 def mark_completed_view(pair, stats):
     pair = Path(pair)
     names = ('meta.json','timestamps.csv','observer.npz','detector_boxes.npz','detector_receipt.json',
-             'identity_choices.json','identity_selected.jpg','identity_reference.jpg',
              'selector_observations.npz','selector_preparation.json','tracking_preview.mp4')
+    if stats.get('identity_protocol') != 'egohumans_annotation':
+        names += ('identity_choices.json','identity_selected.jpg','identity_reference.jpg')
     names += tuple(n for n in ('recovery_choices.json','tracking_diagnostics.json') if (pair/n).is_file())
     atomic_json(pair/'view_complete.json', {'statistics':stats,'outputs':{n:_hash(pair/n) for n in names}})
 

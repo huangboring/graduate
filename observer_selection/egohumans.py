@@ -103,7 +103,7 @@ def compute_rays(xy, valid, camera, tracker):
     return np.where(valid[:,None,None],local,0).reshape(T,39).astype('f4')
 
 
-def _selector_observations(pair: Path, timestamps: np.ndarray, confidence_policy='strict'):
+def _selector_observations(pair: Path, timestamps: np.ndarray, confidence_policy='strict', allow_annotation=False):
     data_path=pair/'selector_observations.npz'
     receipt_path=pair/'selector_preparation.json'
     if not receipt_path.is_file() or not data_path.is_file():
@@ -111,8 +111,10 @@ def _selector_observations(pair: Path, timestamps: np.ndarray, confidence_policy
     receipt=_json(receipt_path)
     if receipt.get('schema_version')!=1 or receipt.get('generator')!='observer_selection.prepare_local_features.v1':
         raise ValueError('Unsupported selector preparation receipt')
-    if receipt.get('reference_pose_used') is not False or receipt.get('crop_source')!='local_image_detector' or receipt.get('temporal_mode')!='framewise_features':
-        raise ValueError('Selector observations must use causal image-detector crops without reference-pose inputs')
+    annotation = allow_annotation and receipt.get('crop_source')=='egohumans_annotation'
+    detector = receipt.get('crop_source')=='local_image_detector' and receipt.get('reference_pose_used') is False
+    if not (annotation or detector) or receipt.get('temporal_mode')!='framewise_features':
+        raise ValueError('Selector observations require image-detector crops or explicitly enabled EgoHumans annotations')
     if receipt.get('output_sha256')!=_hash(data_path):
         raise ValueError('Selector observation digest mismatch')
     if not receipt.get('input_files') or not receipt.get('feature_models'):
@@ -270,12 +272,12 @@ def export_prepared_egohumans(manifest_path, output_path, allow_benchmark_inputs
 
 
 def prepare_local_features(pair_dir, boxes_path, boxes_receipt_path, vit, dino,
-                           feature_model_ids: dict[str,str], frames=None):
+                           feature_model_ids: dict[str,str], frames=None, *, allow_annotation=False):
     """Re-extract per-frame ViTPose/DINO from independently detected target boxes.
 
     `vit.batch(images,[boxes])->objects.xy/scores`, `dino.batch_cls(PIL crops)`
-    match official helper APIs. No detector is introduced; caller supplies its
-    causal boxes + honest receipt. This function NEVER reads GT bbox files.
+    match official helper APIs. The caller supplies boxes and records whether
+    the crops use a detector or official dataset annotations.
     """
     from PIL import Image
     pair=Path(pair_dir);boxpath=Path(boxes_path);receiptpath=Path(boxes_receipt_path)
@@ -284,10 +286,14 @@ def prepare_local_features(pair_dir, boxes_path, boxes_receipt_path, vit, dino,
     if set(feature_model_ids) not in ({'vitpose','dinov3'}, {'vitpose','dinov2'}) or not all(feature_model_ids.values()):
         raise ValueError('Record exact ViTPose and DINO checkpoint IDs/digests')
     receipt=_json(receiptpath);boxes=_npz(boxpath);meta=_json(pair/'meta.json');ts=_timestamps(pair,meta);T=len(ts)
-    if receipt.get('crop_source')!='local_image_detector' or receipt.get('reference_pose_used') is not False or receipt.get('output_sha256')!=_hash(boxpath):
-        raise ValueError('Need detector-produced boxes and verifiable non-reference-pose receipt; do not relabel GT/egonet boxes')
-    if not receipt.get('detector_checkpoint') or receipt.get('identity_source') not in ('local_tracking','manual_initial_identity','manual_initial_and_recovery_review'):
-        raise ValueError('Detector checkpoint and causal target identity association must be recorded')
+    annotation = (allow_annotation and receipt.get('crop_source')=='egohumans_annotation'
+                  and receipt.get('identity_source')=='dataset_human_name'
+                  and receipt.get('annotation_target')==meta.get('wearer_aria'))
+    detector = (receipt.get('crop_source')=='local_image_detector' and receipt.get('reference_pose_used') is False
+                and receipt.get('detector_checkpoint') and receipt.get('identity_source') in
+                ('local_tracking','manual_initial_identity','manual_initial_and_recovery_review'))
+    if not (annotation or detector) or receipt.get('output_sha256')!=_hash(boxpath):
+        raise ValueError('Need verified detector or explicitly enabled annotated crop receipt')
     recovery_log=None
     if receipt.get('identity_source')=='manual_initial_and_recovery_review':
         recovery_log=pair/'recovery_choices.json'
@@ -334,7 +340,7 @@ def prepare_local_features(pair_dir, boxes_path, boxes_receipt_path, vit, dino,
     with destination.open('xb') as f:
         np.savez_compressed(f,timestamps_ns=ts,last_input_t_ns=np.maximum(last,ts),xy=xy,confidence=confidence,bbox=b,bbox_valid=valid,dino_cls=cls)
     out={'schema_version':1,'generator':'observer_selection.prepare_local_features.v1',
-         'crop_source':'local_image_detector','reference_pose_used':False,'temporal_mode':'framewise_features',
+         'crop_source':receipt['crop_source'],'reference_pose_used':receipt.get('reference_pose_used'),'temporal_mode':'framewise_features',
          'output_sha256':_hash(destination),'feature_models':feature_model_ids,
          'input_files':[{'path':str(p.resolve()),'sha256':_hash(p)} for p in (boxpath,receiptpath,pair/'meta.json',pair/'timestamps.csv')],
          'generator_sha256':_hash(Path(__file__))}

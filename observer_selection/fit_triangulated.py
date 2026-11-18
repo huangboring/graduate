@@ -215,11 +215,14 @@ def train(prepared, sequence, output, repo, checkpoint, device, epochs, budget, 
     contract={'prepared':str(prepared),'replay_sha256':_hash(prepared/'replay.npz'),
               'checkpoint_sha256':_hash(checkpoint),'sequence':str(sequence),'epochs_schema':1,
               'budget':budget,'cost_m_per_source':cost,'windows':windows,
+              'crop_provenance':frames[0].metadata.get('crop_provenance'),
               'scope':'training-sequence only, synthetic target trackers and reference-derived floor'}
     saved = output/'checkpoint.pt'
     start, history = 0,[]
     if resume:
         previous=json.loads((output/'experiment.json').read_text(encoding='utf-8'))
+        if 'crop_provenance' not in previous and contract['crop_provenance']=='local_detector':
+            previous['crop_provenance']='local_detector'
         if previous!=contract:
             raise ValueError('Resume inputs/config differ; choose another output')
         if saved.exists():

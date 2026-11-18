@@ -13,7 +13,7 @@ from .preparation_cache import (atomic_json, atomic_npz, load_or_create_contract
 
 def prepare_raw(sequence, output, target='aria01', requester='aria02', sources=('aria03','aria04'),
                 repo='external/EgoExoMoCap', body_model=None, device='cuda', restart_setup=False,
-                resume=False, model_cache=None, reset_views=(), review_tracking=False, reuse_candidates=None):
+                resume=False, model_cache=None, reset_views=(), review_tracking=False, reuse_candidates=None, annotation_boxes=False):
     import torch
     from torchvision.models.detection import fasterrcnn_resnet50_fpn, FasterRCNN_ResNet50_FPN_Weights
     from .image_features import DinoV2Encoder, checkpoint_identity
@@ -25,6 +25,8 @@ def prepare_raw(sequence, output, target='aria01', requester='aria02', sources=(
     roster=(requester,*sources)
     if len(set((target,*roster)))!=len(roster)+1 or len(sources)<2:
         raise ValueError('Need distinct target, requester and at least two helpers')
+    if annotation_boxes and (review_tracking or reuse_candidates):
+        raise ValueError('Annotation crops do not use tracking reviews or detector candidate caches')
     if restart_setup and resume: raise ValueError('Choose --resume or --restart-setup, not both')
     if reset_views and (not resume or not set(reset_views)<=set(roster)):
         raise ValueError('--reset-view requires --resume and names from the observer roster')
@@ -70,12 +72,23 @@ def prepare_raw(sequence, output, target='aria01', requester='aria02', sources=(
         camera_poses[aria]=np.stack([upright_camera(read_calibration(p)[1]@relative) for p in calibs[aria]])
         print(f'{aria}: camera calibration OK; alignment scale={scales[aria]:.9g}',flush=True)
     out.mkdir(parents=True,exist_ok=True)
+    annotations={}
+    if annotation_boxes:
+        from .annotation_boxes import export_annotated_boxes
+        for source in roster:
+            folder=root/'processed_data'/'poses2d'/source/'rgb'
+            found=numbered(folder,'.npy')
+            if not set(ids)<=found.keys():
+                raise ValueError(f'Missing official pose annotations in {folder}')
+            annotations[source]=[found[i] for i in ids]
     cache_dir=Path(model_cache).resolve() if model_cache else out/'model_cache'
     torch.hub.set_dir(str(cache_dir))
     weights=FasterRCNN_ResNet50_FPN_Weights.COCO_V1
-    detector=fasterrcnn_resnet50_fpn(weights=weights).eval().to(device)
-    detector_file=next(cache_dir.glob('checkpoints/fasterrcnn_resnet50_fpn*.pth'))
-    detector_id=str(weights)+';sha256='+_hash(detector_file)
+    detector=detector_id=None
+    if not annotation_boxes:
+        detector=fasterrcnn_resnet50_fpn(weights=weights).eval().to(device)
+        detector_file=next(cache_dir.glob('checkpoints/fasterrcnn_resnet50_fpn*.pth'))
+        detector_id=str(weights)+';sha256='+_hash(detector_file)
     vit_file=repo/'data_prep/shared/vitpose_predictor.py'
     import importlib.util,sys
     spec=importlib.util.spec_from_file_location('_raw_vitpose',vit_file)
@@ -90,7 +103,7 @@ def prepare_raw(sequence, output, target='aria01', requester='aria02', sources=(
     model_path=(Path(body_model) if body_model else repo/'third_party/body_models/smplh/neutral/model.npz').resolve()
     print('Verifying raw input hashes for cache/resume provenance...',flush=True)
     colmap_files=[transform_file.parent/name for name in ('cameras.txt','images.txt')] if fixed else []
-    all_inputs=[transform_file,*colmap_files,model_path,*smpl.values(),*[p for a in roster for p in (*calibs[a],*images[a])]]
+    all_inputs=[transform_file,*colmap_files,model_path,*smpl.values(),*[p for a in roster for p in (*calibs[a],*images[a],*annotations.get(a,()))]]
     input_files=[{'path':str(p),'sha256':_hash(p)} for p in all_inputs]
     from . import raw_prepare,raw_tracking,appearance_tracking,image_features,egohumans
     original_pipeline_hash='82df29f6bb6c46299e96ee66838efb4d9fc28171415e9a8e2f3ce82c3e04886b'
@@ -100,17 +113,29 @@ def prepare_raw(sequence, output, target='aria01', requester='aria02', sources=(
               'tracker':AppearanceTracker().description(),'device':device,'torch':str(torch.__version__),
               'pipeline_sha256':_hash(Path(__file__)) if fixed else original_pipeline_hash,
               'code_hashes':{m.__name__:_hash(Path(m.__file__)) for m in (raw_prepare,raw_tracking,appearance_tracking,image_features,egohumans)}}
-    if resume:
+    if resume and not annotation_boxes:
         # Frame navigation changes how an explicit ID is entered. Preserve
         # verified image/feature caches from the previous prompt implementation.
         existing=json.loads((out/'preparation_run.json').read_text(encoding='utf-8'))
         previous_tracker=existing['code_hashes'].get(raw_tracking.__name__)
         if previous_tracker in ('3d9762f68d5095c50002e4a02b439bb5c141dc8796cebcd17fc5b0981d3557b8', '0c269bbe3d6b90a5235a9621a76ad1cf0de1c6136bc2fc68c823e36ac89f883b', '4de7144cdafe7f7eb0e77a4ddae4e42cc3594476008db0e9151b31743e150d28', 'be208fbba6d1313db09454c2a7ec6df761181ac481bc1f9d5caca25e12350bf9'):
             contract['code_hashes'][raw_tracking.__name__]=previous_tracker
+        previous_helpers = {
+            raw_prepare.__name__: ('5e602839d4c65e212ab9d65cd9570894ba757f99bbc6da1ddc4b96c42298eda6', 'be216ba0dfb44c850b3d297901a4ecc31606507cceb5ac6814ea338a815d09f3', '4d3f58a0a175475fa3b2f1f4ba739d7b568ac39aaacec78daf82f26f2062bfa8', '3f61355dfccb4c1c16ffdd107cd493816acb731958ac8e30acbd6be6f0dfe6f6'),
+            egohumans.__name__: ('c338b635a7b1f295e4ff13acd6e154613a020ec5887784f4a7046010734d2235', '73db20f5aad54b9fc04df0295d1e28e4ce1601b135e51f86db1b2abab697aa45', '8ebd9085750a71186dbb3e39ee23f1ca488fa51d5242e0da7150516b8f5ca990', 'be63598b3be123e73db81af4ab9c5dca62a881761dfa485f10eb8b21fdd9b5f9'),
+        }
+        for name,digests in previous_helpers.items():
+            digest=existing['code_hashes'].get(name)
+            if digest in digests:
+                contract['code_hashes'][name]=digest
         previous_pipeline=existing.get('pipeline_sha256')
-        if previous_pipeline in ('0580b0589933cc168dae2684a7a66830896cb19892649146ff6b45caee24d687', 'eba98f40d289d8ffb65dbf00b681e04743f6a13465920c3d4d77922fe56e42b4', 'd314254e78cab8cfaa27c1aac6f638eef010354a97cf5375927dde9584efa81f', 'edd41f81d5f951b3831692c4bb1eb92b4f5e445fdea64f73c95ed5029a8635f9'):
+        if previous_pipeline in ('c5f8847a4750a7364c76d68be5d5ca83a0d2312c6aa328fe56014ec651ac55c5', '0db17abb5aaf54ea24b007c671f91998e35641a50e743bbfe3a76dc3bbf8ad68', '477c744de1fb937a7777a26b7f867503a6a8cf8ae4d1b99a8749909447a57f37', '0e5051cf61271946290882486c452604add37f684af0a563af0eeef7566f6150') or previous_pipeline in ('0580b0589933cc168dae2684a7a66830896cb19892649146ff6b45caee24d687', 'eba98f40d289d8ffb65dbf00b681e04743f6a13465920c3d4d77922fe56e42b4', 'd314254e78cab8cfaa27c1aac6f638eef010354a97cf5375927dde9584efa81f', 'edd41f81d5f951b3831692c4bb1eb92b4f5e445fdea64f73c95ed5029a8635f9'):
             contract['pipeline_sha256']=previous_pipeline
     load_or_create_contract(out/'preparation_run.json',contract,resume)
+    if annotation_boxes:
+        from . import annotation_boxes as annotation_module
+        contract['crop_source']='egohumans_annotation'
+        contract['code_hashes'][annotation_module.__name__]=_hash(Path(annotation_module.__file__))
     if fixed:
         from . import fixed_camera
         contract['code_hashes'][fixed_camera.__name__]=_hash(Path(fixed_camera.__file__))
@@ -148,11 +173,14 @@ def prepare_raw(sequence, output, target='aria01', requester='aria02', sources=(
                    observer_T_dev_cam=np.eye(4),observer_head_R=poses[:,:3,:3],
                    observer_head_pos=poses[:,:3,3],observer_img_size=camera.output_size if camera else [1408,1408])
         frames=camera or RectifiedFrames(images[aria],calibs[aria])
-        stats[aria]=track_view(pair,frames,ids,timestamps,detector,dino,device,target,detector_id,reference,review_tracking)
+        if annotation_boxes:
+            stats[aria]=export_annotated_boxes(pair,frames,ids,timestamps,annotations[aria],target,camera is not None)
+        else:
+            stats[aria]=track_view(pair,frames,ids,timestamps,detector,dino,device,target,detector_id,reference,review_tracking)
         archive_partial_features(pair)
-        prepare_local_features(pair,pair/'detector_boxes.npz',pair/'detector_receipt.json',vit,dino,models,frames)
+        prepare_local_features(pair,pair/'detector_boxes.npz',pair/'detector_receipt.json',vit,dino,models,frames,allow_annotation=annotation_boxes)
         feature_receipt=pair/'selector_preparation.json';r=json.loads(feature_receipt.read_text(encoding='utf-8'))
-        paths={str(p) for p in (transform_file,*(colmap_files if aria in fixed else ()),*calibs[aria],*images[aria])}
+        paths={str(p) for p in (transform_file,*(colmap_files if aria in fixed else ()),*calibs[aria],*images[aria],*annotations.get(aria,()))}
         r['input_files'].extend(item for item in input_files if item['path'] in paths)
         r['input_files'].append({'path':str(out/'preparation_run.json'),'sha256':_hash(out/'preparation_run.json')})
         r['raw_generator_sha256']=_hash(Path(__file__));atomic_json(feature_receipt,r)
@@ -190,16 +218,18 @@ def prepare_raw(sequence, output, target='aria01', requester='aria02', sources=(
               'camera_calibration':{'provenance':'calibrated','target_pose_used':False,'rectified_pinhole':True,
                 'alignment_scales':scales,'scale_normalization':'divide full world-to-camera top3x4 by positive uniform scale; preserve camera centre and projection',
                 'description':('Per-frame Aria calibration and fixed rectified COLMAP cameras; aria01 anchor' if fixed else 'Official per-frame Aria calibration; aria01 anchor; native CCW / rectification / upright CW; rotate camera axes Q, diagonal K')}}
+    if annotation_boxes:
+        manifest['crop_provenance']='egohumans_annotation'
     mp=out/'manifest.json';atomic_json(mp,manifest)
     exported=export_local_egohumans(mp,out/'replay.npz')
     receipt_path=Path(exported['provenance']);receipt=json.loads(receipt_path.read_text(encoding='utf-8'))
     paths={str(p) for p in (model_path,*smpl.values())}
     receipt['input_files'].extend(item for item in input_files if item['path'] in paths)
-    receipt['raw_generator_sha256']=_hash(Path(__file__));receipt['tracker_version']=VERSION
+    receipt['raw_generator_sha256']=_hash(Path(__file__));receipt['tracker_version']='egohumans_annotation' if annotation_boxes else VERSION
     receipt['supervision']='SMPL-H first22 FK from supplied fitted SMPL parameters; dataset fit reference, not new mocap measurements'
     atomic_json(receipt_path,receipt)
-    summary={**exported,'tracker_version':VERSION,'tracking':stats,'elapsed_seconds_this_invocation':time.monotonic()-start,
-             'review_required':'Inspect identity_selected.jpg and tracking_preview.mp4 for every view. Generic DINO appearance is not certified identity.'}
+    summary={**exported,'tracker_version':'egohumans_annotation' if annotation_boxes else VERSION,'tracking':stats,'elapsed_seconds_this_invocation':time.monotonic()-start,
+             'review_required':('Inspect tracking_preview.mp4 for annotation alignment.' if annotation_boxes else 'Inspect identity_selected.jpg and tracking_preview.mp4 for every view. Generic DINO appearance is not certified identity.')}
     atomic_json(out/'preparation_summary.json',summary)
     names=['manifest.json','replay.npz','replay.provenance.json','preparation_summary.json']
     atomic_json(complete,{name:_hash(out/name) for name in names})

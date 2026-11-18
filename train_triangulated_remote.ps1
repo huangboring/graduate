@@ -1,15 +1,16 @@
 param(
     [string]$Python = 'D:\Ray\venvs\graduate-research\Scripts\python.exe',
     [string]$Sequence = 'data/EgoHumans/01_tagging/001_tagging',
-    [string]$Prepared = 'data/prepared/tagging001_triangulated_mixed',
-    [string]$Run = 'runs/tagging001_triangulated_mixed',
+    [string]$Prepared = 'data/prepared/tagging001_triangulated_annotated',
+    [string]$Run = 'runs/tagging001_triangulated_annotated',
     [string]$Repo = 'external/EgoExoMoCap',
     [string[]]$Sources = @('aria03','aria04','cam01','cam02','cam03'),
     [string]$ModelCache = 'data/prepared/tagging001_v2/model_cache',
     [int]$Epochs = 8,
     [int]$Budget = 2,
     [switch]$PreparedOnly,
-    [switch]$SkipPrepare
+    [switch]$SkipPrepare,
+    [switch]$TrackBoxes
 )
 
 $ErrorActionPreference = 'Stop'
@@ -33,6 +34,7 @@ try {
     if (!$SkipPrepare -and !(Test-Path -LiteralPath (Join-Path $Prepared 'preparation_complete.json'))) {
         $prep = @('-m','observer_selection','prepare-raw','--sequence',$Sequence,'--output',$Prepared,
                   '--requester','aria02','--target','aria01','--repo',$Repo,'--device','cuda','--sources') + $Sources
+        if (!$TrackBoxes) { $prep += '--annotation-boxes' }
         if ($ModelCache -and (Test-Path -LiteralPath $ModelCache -PathType Container)) {
             $prep += @('--model-cache',$ModelCache)
         }

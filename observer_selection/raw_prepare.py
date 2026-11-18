@@ -109,7 +109,7 @@ class RectifiedFrames:
         intr, _ = read_calibration(self.calibrations[index])
         if self.intr is None or not np.array_equal(intr,self.intr):
             self.maps = make_map(intr); self.intr = intr
-        image = cv2.imread(str(self.paths[index]))
+        image = cv2.imdecode(np.fromfile(self.paths[index],dtype=np.uint8),cv2.IMREAD_COLOR)
         if image is None or image.shape != (1408,1408,3):
             raise ValueError(f'Expected 1408x1408 RGB image: {self.paths[index]}')
         native = cv2.rotate(image,cv2.ROTATE_90_COUNTERCLOCKWISE)
@@ -136,7 +136,7 @@ def match_track(previous, boxes, minimum_iou=.2, ambiguity_margin=.1):
 
 def prepare_raw(sequence, output, target='aria01', requester='aria02', sources=('aria03','aria04'),
                 repo='external/EgoExoMoCap', body_model=None, device='cuda', restart_setup=False,
-                resume=False, model_cache=None, reset_views=(), review_tracking=False, reuse_candidates=None):
+                resume=False, model_cache=None, reset_views=(), review_tracking=False, reuse_candidates=None, annotation_boxes=False):
     from .raw_pipeline import prepare_raw as run
     return run(sequence, output, target, requester, sources, repo, body_model, device,
-               restart_setup, resume, model_cache, reset_views, review_tracking, reuse_candidates)
+               restart_setup, resume, model_cache, reset_views, review_tracking, reuse_candidates, annotation_boxes)

@@ -156,6 +156,22 @@ class RawGeometryTests(unittest.TestCase):
                 self.assertEqual(reviewed['tracking']['aria02']['identity_protocol'],'manual_initial_and_recovery_review')
                 review_receipt=json.loads((base/'reviewed/aria02/selector_preparation.json').read_text())
                 self.assertEqual(review_receipt['identity_source'],'manual_initial_and_recovery_review')
+                for aria in ('aria02','aria03','aria04'):
+                    label=root/'processed_data/poses2d'/aria/'rgb'
+                    label.mkdir(parents=True)
+                    np.save(label/'00001.npy',np.array([{'human_name':'aria04','bbox':[100,100,300,500,1]}],object))
+                    np.save(label/'00002.npy',np.array([{'human_name':'aria01','bbox':[550,550,900,950,1]}],object))
+                with patch('builtins.input',side_effect=AssertionError('Annotated mode must not prompt')):
+                    annotated=prepare_raw(root,base/'annotated',repo=repo,body_model=body,device='cpu',
+                                          annotation_boxes=True)
+                    repeated_annotations=prepare_raw(root,base/'annotated',repo=repo,body_model=body,device='cpu',
+                                                      annotation_boxes=True,resume=True)
+                seq=load_sequence(annotated['output'])
+                self.assertEqual(counter['calls'],6)
+                self.assertEqual(repeated_annotations['output'],annotated['output'])
+                self.assertEqual(seq[0].metadata['crop_provenance'],'egohumans_annotation')
+                self.assertFalse(seq[0].observation.valid.any())
+                self.assertTrue(seq[1].observation.valid.all())
             sequence=load_sequence(result['output'])
             self.assertEqual(len(sequence),2)
             self.assertEqual(sequence[0].candidates,('aria03','aria04'))

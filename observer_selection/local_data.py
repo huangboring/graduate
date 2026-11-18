@@ -24,6 +24,7 @@ def export_local_egohumans(manifest_path, output_path):
             or not calibration.get('description') or calibration.get('target_pose_used') is not False
             or calibration.get('rectified_pinhole') is not True):
         raise ValueError('Declare non-target-GT camera provenance, description and rectified pinhole images')
+    annotation=m.get('crop_provenance')=='egohumans_annotation'
     target, requester = str(m['target_id']), str(m['requester_id'])
     sources = tuple(map(str,m['source_ids']))
     if len(sources) < 2 or len(set(sources)) != len(sources) or target == requester or {target,requester}&set(sources):
@@ -45,7 +46,7 @@ def export_local_egohumans(manifest_path, output_path):
             grid, world = ts, meta.get('world_frame')
         if world is None or meta.get('world_frame') != world or not np.array_equal(ts,grid):
             raise ValueError('Pair timestamps/world frames must match exactly')
-        data, deps = _selector_observations(pair,grid,confidence_policy='clip_heatmap_v1')
+        data, deps = _selector_observations(pair,grid,confidence_policy='clip_heatmap_v1',allow_annotation=annotation)
         cam = _npz(pair/'observer.npz'); T=len(grid)
         R = _rotations(cam['observer_head_R'],T,'camera device rotation')
         p = _array(cam['observer_head_pos'],(T,3),'camera device translation')
@@ -73,8 +74,8 @@ def export_local_egohumans(manifest_path, output_path):
          'coordinate_frame':np.array('root_relative'),'output_axes':np.array(OUTPUT_AXES),
          'units':np.array('metres'),'input_provenance':np.array('estimated'),
          'camera_provenance':np.array(calibration['provenance']),
-         'coordinate_convention':np.array(CONVENTION),'crop_provenance':np.array('local_detector'),
-         'temporal_provenance':np.array('causal'),'preparation_manifest_sha256':np.array(_hash(manifest_path)),
+         'coordinate_convention':np.array(CONVENTION),'crop_provenance':np.array('egohumans_annotation' if annotation else 'local_detector'),
+         'temporal_provenance':np.array('annotation_assisted' if annotation else 'causal'),'preparation_manifest_sha256':np.array(_hash(manifest_path)),
          'gt_joints':gt_camera.astype('f4'),'gt_valid':np.ones((T,22),bool)}
     for key in ('xy','bbox','confidence','dino_cls','bbox_valid','camera_to_world','intrinsics'):
         out['local_'+key]=local[key]
@@ -87,7 +88,7 @@ def export_local_egohumans(manifest_path, output_path):
     with output.open('xb') as f: np.savez_compressed(f,**out)
     receipt={'schema_version':2,'generator':'local_aux_export_v1','output_sha256':_hash(output),
         'input_files':[{'path':str(p.resolve()),'sha256':_hash(p)} for p in dict.fromkeys(dependencies)],
-        'camera_calibration':calibration,'target_tracker_used':False,'dropped_initial_frames':0,
+        'camera_calibration':calibration,'target_tracker_used':False,'annotation_assisted_crops':annotation,'dropped_initial_frames':0,
         'reference_usage':'GT first22 root-relative joints for loss only; not model inputs',
         'output_axes':OUTPUT_AXES,'shape_policy':'neutral decoder, not GT betas',
         'confidence_encoding':{s:pairs[s]['confidence_encoding'] for s in pairs},
