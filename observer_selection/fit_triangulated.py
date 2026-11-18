@@ -45,15 +45,23 @@ def matched_random(candidates, learned, rng):
 
 
 class AppearanceSelector(SelectorNetwork):
-    def __init__(self):
+    def __init__(self, appearance='dino'):
         super().__init__(13)
+        self.appearance_kind = appearance
+        inputs = {'dino':768,'cnn':576,'none':0}[appearance]
+        size = 32 if inputs else 0
         self.local_scorer = torch.nn.Sequential(torch.nn.Linear(2*self.hidden,self.hidden),
                                                torch.nn.GELU(),torch.nn.Linear(self.hidden,1))
-        self.appearance = torch.nn.Sequential(torch.nn.Linear(768,32), torch.nn.LayerNorm(32))
-        self.demand_encoder = self._encoder(11*self.joints+5+32,self.hidden)
-        self.observation_encoder = self._encoder(5*self.joints+1+32,self.hidden)
+        self.appearance = (torch.nn.Sequential(torch.nn.Linear(inputs,32),torch.nn.LayerNorm(32))
+                           if inputs else None)
+        self.demand_encoder = self._encoder(11*self.joints+5+size,self.hidden)
+        self.observation_encoder = self._encoder(5*self.joints+1+size,self.hidden)
 
     def _appearance(self, data, key):
+        if self.appearance is None:
+            return next(self.parameters()).new_zeros(0)
+        if self.appearance_kind=='cnn':
+            return self.appearance(self._tensor(data['cnn_cls'],576,'MobileNet appearance'))
         value = data.get(key)
         if value is None:
             return next(self.parameters()).new_zeros(32)
@@ -78,10 +86,11 @@ class AppearanceSelector(SelectorNetwork):
 
 
 class Rollout:
-    def __init__(self, selector, model, frames, raw, head, rotations, widths, fixed, config, rng):
+    def __init__(self, selector, model, frames, raw, head, rotations, widths, fixed, config, rng, joint_weights):
         self.selector, self.model = selector, model
         self.candidates = frames[0].candidates
         self.config, self.rng = config, rng
+        self.joint_weights = joint_weights
         self.head, self.rotations = head, rotations
         self.widths, self.fixed = widths, fixed
         self.memory, self.cameras, self.last = {}, {}, {}
@@ -131,10 +140,17 @@ class Rollout:
                     source in self.fixed, now, self.widths[self.raw], self.widths[source])
                 scores.append(self.selector.score(demand, self.memory[source], geometry_features(geo, now),
                     now-self.last[source], True))
-            selected, logp = choose(torch.stack(scores),local_score,self.candidates,required,mode,self.rng)
+            scores = torch.stack(scores)
+            if mode=='rank_two':
+                free = [i for i,source in enumerate(self.candidates) if source not in required]
+                ranked = sorted(free,key=lambda i:(-float(scores[i]),self.candidates[i]))
+                selected = (*required,*(self.candidates[i] for i in ranked[:2-len(required)]))
+            else:
+                selected, logp = choose(scores,local_score,self.candidates,required,mode,self.rng)
         packets = self._accept(frame, selected)
         views = (obs, *packets)
-        confidences = [self.model.confidence(view) for view in views]
+        confidences = ([view.confidence for view in views] if self.joint_weights=='vitpose'
+                       else [self.model.confidence(view) for view in views])
         points, state = triangulate_views(views, self.head[index], self.rotations[index], confidences)
         return points, state, selected, logp, required
 
@@ -142,12 +158,12 @@ class Rollout:
         self.memory = {source: state.detach() for source,state in self.memory.items()}
 
 
-def _run(data, model, selector, config, mode, seed, windows, optimiser=None, cost=.005, match_rows=None):
+def _run(data, model, selector, config, mode, seed, windows, optimiser=None, cost=.005, match_rows=None, joint_weights="scorenet"):
     frames, ids, widths, fixed, raw, sparse, truth, rotations = data
     results = []
     all_predictions, all_states = [], []
     head = truth[:,15]
-    rollout = Rollout(selector,model,frames,raw,head,rotations,widths,fixed,config,random.Random(seed))
+    rollout = Rollout(selector,model,frames,raw,head,rotations,widths,fixed,config,random.Random(seed),joint_weights)
     running = None
     for start in range(0, windows*model.window, model.window):
         stop = start+model.window
@@ -187,11 +203,11 @@ def _run(data, model, selector, config, mode, seed, windows, optimiser=None, cos
 
 
 @torch.no_grad()
-def compare_original_fusion(data, model, selector, config, windows, output):
+def compare_original_fusion(data, model, selector, config, windows, output, joint_weights):
     import csv
 
     frames, ids, _, _, requester, sparse, truth, rotations = data
-    _, triangulated, _ = _run(data,model,selector,config,'all',2026,windows)
+    _, triangulated, _ = _run(data,model,selector,config,'all',2026,windows,joint_weights=joint_weights)
     head = truth[:,15]
     original = []
     for start in range(0,windows*model.window,model.window):
@@ -217,7 +233,7 @@ def compare_original_fusion(data, model, selector, config, windows, output):
         'view_ids':[requester,*frames[0].candidates],
         'methods':{'EgoExoMoCap original fusion (DINOv2)':float(errors[:,0].mean()),
                    'Triangulation + single Exo token':float(errors[:,1].mean())},
-        'unit':'MPJPE mm',
+        'unit':'MPJPE mm','triangulation_weights':joint_weights,
     }
     with (output/'fusion_comparison.csv').open('w',encoding='utf-8',newline='') as stream:
         writer=csv.writer(stream)
@@ -226,7 +242,7 @@ def compare_original_fusion(data, model, selector, config, windows, output):
     atomic_json(output/'fusion_comparison.json',result)
     print(json.dumps(result,indent=2),flush=True)
 
-def train(prepared, sequence, output, repo, checkpoint, device, epochs, cost, max_windows, resume, render, compare_original=False):
+def train(prepared, sequence, output, repo, checkpoint, device, epochs, cost, max_windows, resume, render, compare_original=False, appearance="dino", joint_weights="scorenet", sensitivity=False):
     from .selection_video import export_outputs, image_paths, raw_joint_overlay
 
     torch.manual_seed(2026)
@@ -256,14 +272,17 @@ def train(prepared, sequence, output, repo, checkpoint, device, epochs, cost, ma
     if len(frames)!=len(ids) or ids!=list(range(ids[0],ids[0]+len(ids))):
         raise ValueError('Prepared replay and raw frame IDs must align and be consecutive')
     fixed = {source for source in candidates if (sequence/'exo'/source).is_dir()}
-    images = image_paths(sequence,(raw,*candidates),ids) if render and not compare_original else {}
+    images = image_paths(sequence,(raw,*candidates),ids) if render and not (compare_original or sensitivity) else {}
     model = SingleExo(repo,checkpoint,device)
     windows = min((len(frames)-1)//model.window,max_windows or len(frames))
     if windows<1:
         raise ValueError(f'Need an initialization frame and at least {model.window} aligned frames')
     sparse, truth, rotations = model.load_tracking(sequence,target,ids[:1+windows*model.window])
+    if appearance=='cnn':
+        from .cnn_features import add_cnn_features
+        frames = add_cnn_features(prepared,sequence,raw,candidates,ids,frames,fixed,device)
     data = frames, ids, widths, fixed, raw, sparse, truth, rotations
-    selector = AppearanceSelector().to(device)
+    selector = AppearanceSelector(appearance).to(device)
     optimiser = torch.optim.AdamW([*selector.parameters(),*model.adapter.parameters()],lr=3e-4)
     from .egohumans import _hash
     config = AcquisitionConfig(max_sources=len(candidates))
@@ -272,6 +291,8 @@ def train(prepared, sequence, output, repo, checkpoint, device, epochs, cost, ma
               'policy':'above_local_plus_refresh','cost_m_per_source':cost,'windows':windows,
               'crop_provenance':frames[0].metadata.get('crop_provenance'),
               'scope':'training-sequence only, synthetic target trackers and reference-derived floor'}
+    if (appearance,joint_weights)!=('dino','scorenet'):
+        contract.update(epochs_schema=3,appearance=appearance,joint_weights=joint_weights)
     saved = output/'checkpoint.pt'
     start, history = 0,[]
     if resume:
@@ -287,10 +308,20 @@ def train(prepared, sequence, output, repo, checkpoint, device, epochs, cost, ma
             start,history=state['epoch'],state['history']
     elif output.exists() and any(output.iterdir()):
         raise FileExistsError('Choose a fresh output or use --resume')
-    if compare_original:
+    if compare_original or sensitivity:
         if not resume or not saved.is_file():
             raise ValueError('Use --resume with a trained run containing checkpoint.pt')
-        compare_original_fusion(data,model,selector,config,windows,output)
+        if sensitivity:
+            result = {}
+            with torch.no_grad():
+                for weights in ('scorenet','vitpose'):
+                    rows,_,_=_run(data,model,selector,config,'all',2026,windows,joint_weights=weights)
+                    result[weights]={'mpjpe_mm':float(np.mean([r['mpjpe_mm'] for r in rows])),
+                                     'mean_triangulated_joints':float(np.mean([r['triangulated_joints'] for r in rows]))}
+            atomic_json(output/'weight_sensitivity.json',result)
+            print(json.dumps(result,indent=2),flush=True)
+        else:
+            compare_original_fusion(data,model,selector,config,windows,output,joint_weights)
         return
     output.mkdir(parents=True,exist_ok=True)
     atomic_json(output/'experiment.json',contract)
@@ -298,7 +329,7 @@ def train(prepared, sequence, output, repo, checkpoint, device, epochs, cost, ma
     if start>epochs:
         raise ValueError('Requested final epoch is lower than saved checkpoint epoch')
     for epoch in range(start,epochs):
-        rows,_,_=_run(data,model,selector,config,'sample',2026+epoch,windows,optimiser,cost)
+        rows,_,_=_run(data,model,selector,config,'sample',2026+epoch,windows,optimiser,cost,joint_weights=joint_weights)
         history.append({'epoch':epoch+1,'mpjpe_mm':float(np.mean([r['mpjpe_mm'] for r in rows])),
                         'mean_requests':float(np.mean([len(r['selected']) for r in rows]))})
         temporary=saved.with_suffix('.tmp')
@@ -307,16 +338,20 @@ def train(prepared, sequence, output, repo, checkpoint, device, epochs, cost, ma
         temporary.replace(saved)
         print(history[-1],flush=True)
     with torch.no_grad():
-        learned,predictions,states=_run(data,model,selector,config,'learned',2026,windows)
-        local,_,_=_run(data,model,selector,config,'local',2026,windows)
-        all_views,_,_=_run(data,model,selector,config,'all',2026,windows)
+        learned,predictions,states=_run(data,model,selector,config,'learned',2026,windows,joint_weights=joint_weights)
+        local,_,_=_run(data,model,selector,config,'local',2026,windows,joint_weights=joint_weights)
+        all_views,_,_=_run(data,model,selector,config,'all',2026,windows,joint_weights=joint_weights)
         random_matched,_,_=_run(data,model,selector,config,'random',2026,windows,
-                               match_rows=learned)
+                               match_rows=learned,joint_weights=joint_weights)
+        fixed_rank,_,_=_run(data,model,selector,config,'rank_two',2026,windows,joint_weights=joint_weights)
+        fixed_random,_,_=_run(data,model,selector,config,'random',2026,windows,
+                              match_rows=fixed_rank,joint_weights=joint_weights)
     atomic_npz(output/'predictions.npz',raw_frame_ids=np.array(ids[1:len(learned)+1]),
                predicted=predictions,reference=truth[1:],joint_states=states)
     warmup={'frame':ids[0],'selected':list(candidates),'mpjpe_mm':None,'triangulated_joints':None}
     export_outputs(output,history,learned,local,all_views,warmup,candidates,raw,predictions,images,
                    random_matched=random_matched,
+                   diagnostics={'Rank (fixed 2)':fixed_rank,'Random (fixed 2)':fixed_random},
                    joints_for=raw_joint_overlay(sequence,images,ids,frames,raw,fixed) if images else None,
                    omitted_frames=len(ids)-len(learned)-1)
 
@@ -331,6 +366,9 @@ def main():
     parser.add_argument('--epochs',type=int,default=8)
     parser.add_argument('--cost',type=float,default=.005,help='Cost in MPJPE metres per extra request')
     parser.add_argument('--max-windows',type=int)
+    parser.add_argument('--appearance',choices=('none','cnn','dino'),default='dino')
+    parser.add_argument('--joint-weights',choices=('vitpose','scorenet'),default='scorenet')
+    parser.add_argument('--sensitivity',action='store_true',help='Compare both joint weights on a fixed all-view checkpoint')
     parser.add_argument('--resume',action='store_true')
     parser.add_argument('--compare-original',action='store_true',help='Evaluate trained run and original fusion on the same all-view inputs')
     parser.add_argument('--no-video',action='store_false',dest='render')

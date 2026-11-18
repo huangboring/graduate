@@ -162,7 +162,7 @@ def write_video(destination, rows, predictions, candidates, local, images, fps=2
 
 
 def export_outputs(output, history, learned, local, all_views, warmup, candidates, requester,
-                   predictions, images, omitted_frames, random_matched=None, joints_for=None):
+                   predictions, images, omitted_frames, random_matched=None, joints_for=None, diagnostics=None):
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
@@ -170,6 +170,7 @@ def export_outputs(output, history, learned, local, all_views, warmup, candidate
     methods = {'Learned':learned,'Local only':local,'All sources':all_views}
     if random_matched is not None:
         methods['Random (matched count)'] = random_matched
+    methods.update(diagnostics or {})
     metrics = {label:{'mpjpe_mm':float(np.mean([row['mpjpe_mm'] for row in rows])),
              'mean_requests':float(np.mean([len(row['selected']) for row in rows])),
              'mean_triangulated_joints':float(np.mean([row['triangulated_joints'] for row in rows]))}

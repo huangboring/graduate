@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import numpy as np
 import torch
+from torchvision.models import mobilenet_v3_small
 
 from observer_selection.fit_triangulated import AppearanceSelector, _run, choose, matched_random
 from observer_selection.official_demo import module_from_file
@@ -128,7 +129,7 @@ class TriangulatedPipelineTest(unittest.TestCase):
             adapter = torch.nn.Linear(39,66)
             @staticmethod
             def confidence(obs):
-                return obs.confidence
+                raise AssertionError('ViTPose mode must not call ScoreNet')
             def reconstruct(self,sparse,head,values,state,valid,floor):
                 return self.adapter(torch.from_numpy(values.reshape(3,39))).reshape(3,22,3)
         model=Model()
@@ -138,10 +139,31 @@ class TriangulatedPipelineTest(unittest.TestCase):
               np.tile(points.astype('f4'),(7,22,1)),np.tile(np.eye(3),(7,1,1)))
         optimiser=torch.optim.Adam([*selector.parameters(),*model.adapter.parameters()])
         result,predictions,_=_run(data,model,selector,AcquisitionConfig(max_sources=1),
-                                   'sample',11,2,optimiser)
+                                   'sample',11,2,optimiser,joint_weights='vitpose')
         self.assertEqual([row['frame'] for row in result],list(range(2,8)))
         self.assertEqual(predictions.shape,(6,22,3))
         self.assertFalse(torch.equal(before,selector.scorer[-1].weight))
+
+    def test_frozen_mobilenet_features_and_optional_selector_input(self):
+        from dataclasses import replace
+        from unittest.mock import patch
+        from observer_selection.cnn_features import MobileNetAppearance, _square_crop
+
+        small = mobilenet_v3_small(weights=None)
+        with patch('torchvision.models.mobilenet_v3_small', return_value=small):
+            encoder=MobileNetAppearance('cpu')
+        crop=_square_crop(np.zeros((150,100,3),dtype='u1'),np.array([-10,10,70,120]))
+        values=encoder([crop])
+        self.assertEqual(values.shape,(1,576))
+        self.assertTrue(np.isfinite(values).all())
+        self.assertFalse(any(p.requires_grad for p in encoder.features.parameters()))
+        obs=view(np.zeros(3),np.array([0.,0.,4.]))
+        obs=replace(obs,backend_context={**obs.backend_context,'cnn_cls':values[0]})
+        for variant in ('none','cnn'):
+            selector=AppearanceSelector(variant)
+            q=selector.demand_sequence([obs])
+            self.assertEqual(q.shape,(selector.hidden,))
+            self.assertTrue(torch.isfinite(selector.local_score(q,obs,None)))
 
     def test_multiview_animation_and_figures(self):
         import cv2
