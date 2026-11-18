@@ -3,12 +3,14 @@ import math
 
 import numpy as np
 
-from .types import Geometry
+from .types import Geometry, Observation
 
 
 def _camera(view):
-    data = view.backend_context if hasattr(view, 'backend_context') else view.payload
-    return np.asarray(data['camera_to_world']), np.asarray(data['intrinsics'])
+    if isinstance(view, Observation):
+        data = view.backend_context
+        return np.asarray(data['local_camera_to_world']), np.asarray(data['local_intrinsics'])
+    return np.asarray(view.payload['camera_to_world']), np.asarray(view.payload['intrinsics'])
 
 
 def _sector(pose, half_fov, radius):

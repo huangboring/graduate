@@ -25,7 +25,7 @@ def view(center, point, mask=None):
     xy = np.tile(x[:2]/x[2], (13,1))
     return Observation('T',1.,xy,np.ones(13,bool) if mask is None else mask,
                        np.array([1,1,640,480]),np.ones(13),
-                       backend_context={'camera_to_world':camera,'intrinsics':k})
+                       backend_context={'local_camera_to_world':camera,'local_intrinsics':k})
 
 
 class TriangulatedPipelineTest(unittest.TestCase):
@@ -84,7 +84,8 @@ class TriangulatedPipelineTest(unittest.TestCase):
             obs=replace(view(np.zeros(3),points),timestamp=i*.05)
             other=view(np.array([1.,0.,0.]),points)
             packet=Packet('C','T',obs.timestamp,other.xy,other.valid,other.bbox,
-                          other.confidence,other.backend_context)
+                          other.confidence,{'camera_to_world':other.backend_context['local_camera_to_world'],
+                                            'intrinsics':other.backend_context['local_intrinsics']})
             frames.append(ReplayFrame(obs,('C',),{}, {'C':packet},np.zeros((22,3)),
                                       np.ones(22,bool),'world'))
         class Model:

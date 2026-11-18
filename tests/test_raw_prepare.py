@@ -186,7 +186,17 @@ class RawGeometryTests(unittest.TestCase):
                 with patch('builtins.input',side_effect=AssertionError('Must use annotated boxes')):
                     mixed=prepare_raw(root,base/'mixed',repo=repo,body_model=body,device='cpu',
                                       sources=('aria03','cam01'),annotation_boxes=True)
-                self.assertTrue(load_sequence(mixed['output'])[1].packets['cam01'].valid.all())
+                mixed_frames=load_sequence(mixed['output'])
+                local=mixed_frames[1].observation
+                packet=mixed_frames[1].packets['cam01']
+                self.assertTrue(packet.valid.all())
+                from observer_selection.triangulation import _camera, camera_geometry, triangulate_views
+                geo=camera_geometry(_camera(local),_camera(packet),0.,True,local.timestamp,1408,640)
+                self.assertTrue(geo.valid[3])
+                values,states=triangulate_views((local,packet),np.array([0.,0.,4.]),np.eye(3),
+                                               [local.confidence,packet.confidence])
+                self.assertEqual(values.shape,(13,3))
+                self.assertTrue((states>0).all())
                 self.assertEqual(counter['calls'],6)
 
             sequence=load_sequence(result['output'])
