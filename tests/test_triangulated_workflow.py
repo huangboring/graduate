@@ -161,7 +161,34 @@ class TriangulatedPipelineTest(unittest.TestCase):
             self.assertTrue(np.isfinite(report['score_loss']))
             self.assertFalse(torch.equal(baseline,selector.local_scorer[-1].weight))
             self.assertTrue(torch.equal(frozen,model.adapter.weight))
+            from observer_selection.subset_training import build_targets as subset_targets, fit_epoch as subset_epoch
+            costs=subset_targets(data,model,directory,1,'frozen-fixture')
+            self.assertEqual(costs.shape,(6,2))
+            np.testing.assert_array_equal(costs,subset_targets(data,model,directory,1,'frozen-fixture'))
+            subset_report=subset_epoch(data,model,selector,AcquisitionConfig(max_sources=1),
+                                       costs,optimiser,2,.002)
+            self.assertTrue(np.isfinite(subset_report['subset_loss']))
+            self.assertTrue(torch.equal(frozen,model.adapter.weight))
 
+
+
+    def test_subset_cost_learns_to_drop_redundant_source(self):
+        from observer_selection.subset_training import masks_for, expected_cost_loss
+        masks=torch.as_tensor(masks_for(2))
+        errors=torch.tensor([.100,.070,.072,.071])
+        margins=torch.zeros(2,requires_grad=True)
+        optimiser=torch.optim.Adam([margins],lr=.1)
+        for _ in range(150):
+            loss=expected_cost_loss(margins,errors,masks,[],.002)
+            optimiser.zero_grad()
+            loss.backward()
+            optimiser.step()
+        self.assertGreater(float(margins[0].detach()),0.)
+        self.assertLess(float(margins[1].detach()),0.)
+        mandatory=torch.zeros(2,requires_grad=True)
+        expected_cost_loss(mandatory,errors,masks,[1],.002).backward()
+        self.assertAlmostEqual(float(mandatory.grad[1]),0.,places=6)
+        self.assertTrue(torch.isfinite(mandatory.grad).all())
 
     def test_frozen_mobilenet_features_and_optional_selector_input(self):
         from dataclasses import replace

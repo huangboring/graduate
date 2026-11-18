@@ -175,8 +175,18 @@ def export_outputs(output, history, learned, local, all_views, warmup, candidate
              'mean_requests':float(np.mean([len(row['selected']) for row in rows])),
              'mean_triangulated_joints':float(np.mean([row['triangulated_joints'] for row in rows]))}
                for label,rows in methods.items()}
+    checks = {}
+    if 'Random (matched count)' in metrics:
+        checks['learned_gain_over_matched_random_mm'] = (
+            metrics['Random (matched count)']['mpjpe_mm']-metrics['Learned']['mpjpe_mm'])
+    if 'Rank (fixed 2)' in metrics and 'Random (fixed 2)' in metrics:
+        checks['fixed_two_gain_over_random_mm'] = (
+            metrics['Random (fixed 2)']['mpjpe_mm']-metrics['Rank (fixed 2)']['mpjpe_mm'])
+    checks['mean_requests_saved_vs_all'] = (
+        metrics['All sources']['mean_requests']-metrics['Learned']['mean_requests'])
     atomic_json(output/'metrics.json',{'scope':'IN-SAMPLE training sequence',
-        'initialization':warmup,'omitted_tail_frames':omitted_frames,'methods':metrics})
+        'initialization':warmup,'omitted_tail_frames':omitted_frames,'methods':metrics,
+        'selection_checks':checks})
     atomic_json(output/'selection.json',{'requester':requester,'candidates':list(candidates),
         'frames':[warmup,*learned]})
     with (output/'frames.csv').open('w',encoding='utf-8',newline='') as stream:

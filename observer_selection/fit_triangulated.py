@@ -244,7 +244,7 @@ def compare_original_fusion(data, model, selector, config, windows, output, join
     atomic_json(output/'fusion_comparison.json',result)
     print(json.dumps(result,indent=2),flush=True)
 
-def train(prepared, sequence, output, repo, checkpoint, device, epochs, cost, max_windows, resume, render, compare_original=False, appearance="dino", joint_weights="scorenet", sensitivity=False, ranking_from=None, label_stride=8):
+def train(prepared, sequence, output, repo, checkpoint, device, epochs, cost, max_windows, resume, render, compare_original=False, appearance="dino", joint_weights="scorenet", sensitivity=False, ranking_from=None, label_stride=8, subset_training=False):
     from .selection_video import export_outputs, image_paths, raw_joint_overlay
 
     torch.manual_seed(2026)
@@ -295,6 +295,8 @@ def train(prepared, sequence, output, repo, checkpoint, device, epochs, cost, ma
               'scope':'training-sequence only, synthetic target trackers and reference-derived floor'}
     if (appearance,joint_weights)!=('dino','scorenet'):
         contract.update(epochs_schema=3,appearance=appearance,joint_weights=joint_weights)
+    if subset_training and not ranking_from:
+        raise ValueError('--subset-training requires --ranking-from')
     if ranking_from:
         if appearance!='none' or joint_weights!='vitpose':
             raise ValueError('Ranking experiment uses --appearance none --joint-weights vitpose')
@@ -310,7 +312,10 @@ def train(prepared, sequence, output, repo, checkpoint, device, epochs, cost, ma
         contract.update(epochs_schema=4,objective='counterfactual_gain_ranking',
                         frozen_from=str(bootstrap),frozen_sha256=_hash(bootstrap/'checkpoint.pt'),
                         label_stride=label_stride,score_scale_m=.005)
-        selector.score_cost = cost/.005
+        if subset_training:
+            contract.update(epochs_schema=5,objective='exact_subset_expected_cost',
+                            target_context='seeded_random_two',entropy_temperature_m=.0005)
+        selector.score_cost = 0. if subset_training else cost/.005
     saved = output/'checkpoint.pt'
     start, history = 0,[]
     if resume:
@@ -347,7 +352,10 @@ def train(prepared, sequence, output, repo, checkpoint, device, epochs, cost, ma
     if start>epochs:
         raise ValueError('Requested final epoch is lower than saved checkpoint epoch')
     if ranking_from:
-        from .ranking_training import build_targets, fit_epoch
+        if subset_training:
+            from .subset_training import build_targets, fit_epoch
+        else:
+            from .ranking_training import build_targets, fit_epoch
         targets = build_targets(data,model,output,label_stride,contract['frozen_sha256'])
     for epoch in range(start,epochs):
         if ranking_from:
@@ -395,6 +403,7 @@ def main():
     parser.add_argument('--max-windows',type=int)
     parser.add_argument('--appearance',choices=('none','cnn','dino'),default='dino')
     parser.add_argument('--joint-weights',choices=('vitpose','scorenet'),default='scorenet')
+    parser.add_argument('--subset-training',action='store_true')
     parser.add_argument('--ranking-from',help='Freeze the adapter from a compatible ViTPose run and train source scores')
     parser.add_argument('--label-stride',type=int,default=8)
     parser.add_argument('--sensitivity',action='store_true',help='Compare both joint weights on a fixed all-view checkpoint')
