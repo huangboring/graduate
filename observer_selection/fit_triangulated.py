@@ -141,6 +141,8 @@ class Rollout:
                 scores.append(self.selector.score(demand, self.memory[source], geometry_features(geo, now),
                     now-self.last[source], True))
             scores = torch.stack(scores)
+            self.latest_scores, self.latest_local_score = scores, local_score
+            local_score = local_score + getattr(self.selector,'score_cost',0.)
             if mode=='rank_two':
                 free = [i for i,source in enumerate(self.candidates) if source not in required]
                 ranked = sorted(free,key=lambda i:(-float(scores[i]),self.candidates[i]))
@@ -242,7 +244,7 @@ def compare_original_fusion(data, model, selector, config, windows, output, join
     atomic_json(output/'fusion_comparison.json',result)
     print(json.dumps(result,indent=2),flush=True)
 
-def train(prepared, sequence, output, repo, checkpoint, device, epochs, cost, max_windows, resume, render, compare_original=False, appearance="dino", joint_weights="scorenet", sensitivity=False):
+def train(prepared, sequence, output, repo, checkpoint, device, epochs, cost, max_windows, resume, render, compare_original=False, appearance="dino", joint_weights="scorenet", sensitivity=False, ranking_from=None, label_stride=8):
     from .selection_video import export_outputs, image_paths, raw_joint_overlay
 
     torch.manual_seed(2026)
@@ -293,6 +295,22 @@ def train(prepared, sequence, output, repo, checkpoint, device, epochs, cost, ma
               'scope':'training-sequence only, synthetic target trackers and reference-derived floor'}
     if (appearance,joint_weights)!=('dino','scorenet'):
         contract.update(epochs_schema=3,appearance=appearance,joint_weights=joint_weights)
+    if ranking_from:
+        if appearance!='none' or joint_weights!='vitpose':
+            raise ValueError('Ranking experiment uses --appearance none --joint-weights vitpose')
+        bootstrap = Path(ranking_from).resolve()
+        source_contract = json.loads((bootstrap/'experiment.json').read_text(encoding='utf-8'))
+        for key in ('replay_sha256','checkpoint_sha256','sequence','windows','joint_weights'):
+            if source_contract.get(key)!=contract.get(key):
+                raise ValueError(f'Frozen reconstruction checkpoint differs in {key}')
+        initial = torch.load(bootstrap/'checkpoint.pt',map_location=device,weights_only=True)
+        model.adapter.load_state_dict(initial['adapter'])
+        model.adapter.requires_grad_(False)
+        optimiser = torch.optim.AdamW(selector.parameters(),lr=1e-4)
+        contract.update(epochs_schema=4,objective='counterfactual_gain_ranking',
+                        frozen_from=str(bootstrap),frozen_sha256=_hash(bootstrap/'checkpoint.pt'),
+                        label_stride=label_stride,score_scale_m=.005)
+        selector.score_cost = cost/.005
     saved = output/'checkpoint.pt'
     start, history = 0,[]
     if resume:
@@ -328,10 +346,19 @@ def train(prepared, sequence, output, repo, checkpoint, device, epochs, cost, ma
     atomic_json(output/'preparation_quality.json',quality)
     if start>epochs:
         raise ValueError('Requested final epoch is lower than saved checkpoint epoch')
+    if ranking_from:
+        from .ranking_training import build_targets, fit_epoch
+        targets = build_targets(data,model,output,label_stride,contract['frozen_sha256'])
     for epoch in range(start,epochs):
-        rows,_,_=_run(data,model,selector,config,'sample',2026+epoch,windows,optimiser,cost,joint_weights=joint_weights)
+        if ranking_from:
+            details = fit_epoch(data,model,selector,config,targets,optimiser,epoch,cost)
+            with torch.no_grad():
+                rows,_,_=_run(data,model,selector,config,'learned',2026,windows,joint_weights=joint_weights)
+        else:
+            details = {}
+            rows,_,_=_run(data,model,selector,config,'sample',2026+epoch,windows,optimiser,cost,joint_weights=joint_weights)
         history.append({'epoch':epoch+1,'mpjpe_mm':float(np.mean([r['mpjpe_mm'] for r in rows])),
-                        'mean_requests':float(np.mean([len(r['selected']) for r in rows]))})
+                        'mean_requests':float(np.mean([len(r['selected']) for r in rows])),**details})
         temporary=saved.with_suffix('.tmp')
         torch.save({'selector':selector.state_dict(),'adapter':model.adapter.state_dict(),
                     'optimiser':optimiser.state_dict(),'epoch':epoch+1,'history':history},temporary)
@@ -368,12 +395,14 @@ def main():
     parser.add_argument('--max-windows',type=int)
     parser.add_argument('--appearance',choices=('none','cnn','dino'),default='dino')
     parser.add_argument('--joint-weights',choices=('vitpose','scorenet'),default='scorenet')
+    parser.add_argument('--ranking-from',help='Freeze the adapter from a compatible ViTPose run and train source scores')
+    parser.add_argument('--label-stride',type=int,default=8)
     parser.add_argument('--sensitivity',action='store_true',help='Compare both joint weights on a fixed all-view checkpoint')
     parser.add_argument('--resume',action='store_true')
     parser.add_argument('--compare-original',action='store_true',help='Evaluate trained run and original fusion on the same all-view inputs')
     parser.add_argument('--no-video',action='store_false',dest='render')
     args=parser.parse_args()
-    if args.epochs<1 or not math.isfinite(args.cost) or args.cost<0 or (
+    if args.epochs<1 or args.label_stride<1 or 96%args.label_stride or not math.isfinite(args.cost) or args.cost<0 or (
             args.max_windows is not None and args.max_windows<1):
         parser.error('Positive epochs/windows and finite nonnegative cost required')
     train(**vars(args))

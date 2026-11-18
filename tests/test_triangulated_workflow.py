@@ -143,6 +143,25 @@ class TriangulatedPipelineTest(unittest.TestCase):
         self.assertEqual([row['frame'] for row in result],list(range(2,8)))
         self.assertEqual(predictions.shape,(6,22,3))
         self.assertFalse(torch.equal(before,selector.scorer[-1].weight))
+        from observer_selection.ranking_training import build_targets, fit_epoch
+        for parameter in model.adapter.parameters():
+            parameter.requires_grad_(False)
+        with tempfile.TemporaryDirectory() as temp:
+            directory=Path(temp)
+            labels=build_targets(data,model,directory,1,'frozen-fixture')
+            self.assertEqual(labels.shape,(6,1))
+            self.assertTrue(np.isfinite(labels).all())
+            np.testing.assert_array_equal(labels,build_targets(data,model,directory,1,'frozen-fixture'))
+            frozen=model.adapter.weight.detach().clone()
+            baseline=selector.local_scorer[-1].weight.detach().clone()
+            optimiser=torch.optim.Adam(selector.parameters(),lr=1e-3)
+            report=fit_epoch(data,model,selector,AcquisitionConfig(max_sources=1),
+                             labels,optimiser,1,.001)
+            self.assertEqual(report['optimizer_updates'],2)
+            self.assertTrue(np.isfinite(report['score_loss']))
+            self.assertFalse(torch.equal(baseline,selector.local_scorer[-1].weight))
+            self.assertTrue(torch.equal(frozen,model.adapter.weight))
+
 
     def test_frozen_mobilenet_features_and_optional_selector_input(self):
         from dataclasses import replace
