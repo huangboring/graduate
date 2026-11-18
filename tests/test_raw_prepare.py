@@ -172,6 +172,23 @@ class RawGeometryTests(unittest.TestCase):
                 self.assertEqual(seq[0].metadata['crop_provenance'],'egohumans_annotation')
                 self.assertFalse(seq[0].observation.valid.any())
                 self.assertTrue(seq[1].observation.valid.all())
+                static=root/'exo/cam01/images'
+                static.mkdir(parents=True)
+                labels=root/'processed_data/poses2d/cam01/rgb'
+                labels.mkdir(parents=True)
+                for frame in (1,2):
+                    cv2.imwrite(str(static/f'{frame:05}.jpg'),np.zeros((480,640,3),np.uint8))
+                    np.save(labels/f'{frame:05}.npy',
+                            np.array([{'human_name':'aria01','bbox':[150,100,420,380,1]}],object))
+                workplace=root/'colmap/workplace'
+                (workplace/'images.txt').write_text('1 1 0 0 0 0 0 0 1 cam01/00001.jpg\n\n')
+                (workplace/'cameras.txt').write_text('1 PINHOLE 640 480 320 320 320 240\n')
+                with patch('builtins.input',side_effect=AssertionError('Must use annotated boxes')):
+                    mixed=prepare_raw(root,base/'mixed',repo=repo,body_model=body,device='cpu',
+                                      sources=('aria03','cam01'),annotation_boxes=True)
+                self.assertTrue(load_sequence(mixed['output'])[1].packets['cam01'].valid.all())
+                self.assertEqual(counter['calls'],6)
+
             sequence=load_sequence(result['output'])
             self.assertEqual(len(sequence),2)
             self.assertEqual(sequence[0].candidates,('aria03','aria04'))

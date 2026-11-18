@@ -77,3 +77,7 @@ class FixedCamera:
         elif self.output_size != self.size:
             image = cv2.resize(image, self.output_size, interpolation=cv2.INTER_AREA)
         return cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+
+    def __iter__(self):
+        for index in range(len(self.paths)):
+            yield self.get(index)

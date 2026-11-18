@@ -113,6 +113,13 @@ def prepare_raw(sequence, output, target='aria01', requester='aria02', sources=(
               'tracker':AppearanceTracker().description(),'device':device,'torch':str(torch.__version__),
               'pipeline_sha256':_hash(Path(__file__)) if fixed else original_pipeline_hash,
               'code_hashes':{m.__name__:_hash(Path(m.__file__)) for m in (raw_prepare,raw_tracking,appearance_tracking,image_features,egohumans)}}
+    if resume and fixed:
+        # The previous reader had identical frames/calibration but lacked iteration.
+        # Keep the manifest bytes so completed view receipts retain their digest.
+        saved=json.loads((out/'preparation_run.json').read_text(encoding='utf-8'))
+        previous=saved.get('pipeline_sha256')
+        if previous in ('248f04f9325d7269664c515e39f92115458ffad03ea9823e37650234e060e552', 'cd32e408228da4759ad1d238c1a146441d01d959d641bbde1d6aede8c8915282', '3ef4b60b1888c88b5edfd121a9556f95e689f500b6c85c124850634a58469957', '49de2af7c589163acc44acb6ea45a66efb191bd7a0d43f5c71ee4b8fc1b115a8'):
+            contract['pipeline_sha256']=previous
     if resume and not annotation_boxes:
         # Frame navigation changes how an explicit ID is entered. Preserve
         # verified image/feature caches from the previous prompt implementation.
