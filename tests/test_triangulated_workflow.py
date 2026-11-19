@@ -169,6 +169,18 @@ class TriangulatedPipelineTest(unittest.TestCase):
                                        costs,optimiser,2,.002)
             self.assertTrue(np.isfinite(subset_report['subset_loss']))
             self.assertTrue(torch.equal(frozen,model.adapter.weight))
+            attention=AppearanceSelector('none','attention')
+            attention_before=attention.score_attention.in_proj_weight.detach().clone()
+            attention_optimiser=torch.optim.Adam(attention.parameters(),lr=1e-3)
+            attention_report=subset_epoch(data,model,attention,AcquisitionConfig(max_sources=1),
+                                         costs,attention_optimiser,2,.002)
+            self.assertEqual(attention_report['optimizer_updates'],2)
+            self.assertTrue(np.isfinite(attention_report['subset_loss']))
+            self.assertFalse(torch.equal(attention_before,attention.score_attention.in_proj_weight))
+            self.assertTrue(torch.equal(frozen,model.adapter.weight))
+            evaluated,_,_=_run(data,model,attention,AcquisitionConfig(max_sources=1),
+                              'learned',2026,2,joint_weights='vitpose')
+            self.assertEqual(len(evaluated),6)
 
 
 
