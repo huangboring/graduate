@@ -166,3 +166,64 @@ def geometry_features(geometry: Geometry | None, now: float) -> np.ndarray:
             raise ValueError(f"geometry feature {i} must lie in [{low},{high}]")
     return np.concatenate((np.where(valid, values, 0.0), valid,
                            [math.log1p(age)])).astype(np.float32)
+
+
+def _compact_observed(observation, joints):
+    """Compact encoding assumes whole-view availability and finite confidences.
+
+    Official prepared replays repeat bbox_valid for every joint. Reject mixed
+    per-joint masks rather than silently discarding their missingness semantics.
+    """
+    values = _observed_features(observation,joints)
+    _, valid, _, confidence_valid, _, _ = values
+    if not np.all(valid == valid[0]):
+        raise ValueError('Compact encoding requires whole-view availability; use legacy for per-joint masks')
+    if valid[0] and not confidence_valid.all():
+        raise ValueError('Compact encoding requires finite confidences for available joints')
+    return values
+
+
+def compact_demand_features(observation, previous=None, joints=None):
+    """5J+6: xy/confidence/rate per joint, then four globals and two view masks.
+
+    Globals: center_x/scale, center_y/scale, log1p(scale), log1p(previous age),
+    current observation available, both frames available for rate estimation.
+    No projected-prior fields or repeated per-joint masks are retained.
+    """
+    now = _time(observation.timestamp,'timestamp')
+    xy,valid,confidence,_,center,scale = _compact_observed(observation,joints)
+    rate = np.zeros_like(xy)
+    age = 0.
+    rate_available = False
+    if previous is not None:
+        if previous.target_id != observation.target_id:
+            raise ValueError('previous observation belongs to a different target')
+        age = now-_time(previous.timestamp,'previous timestamp')
+        if age <= 0:
+            raise ValueError('previous observation must strictly precede current time')
+        old,old_valid,*_ = _compact_observed(previous,len(xy))
+        rate_available = bool(valid[0] and old_valid[0])
+        if rate_available:
+            rate = (xy-old)/age
+    rows = np.column_stack((xy,confidence,rate))
+    globals_ = [*(center/scale),math.log1p(scale),math.log1p(age),float(valid[0]),float(rate_available)]
+    result = np.concatenate((rows.reshape(-1),globals_)).astype(np.float32)
+    if not np.isfinite(result).all():
+        raise ValueError('Compact features exceed finite float32 range')
+    return result
+
+
+def compact_packet_features(packet,last_timestamp=None,joints=None):
+    """3J+2: xy/confidence per joint, view availability and acquisition gap."""
+    now = _time(packet.timestamp,'packet timestamp')
+    xy,valid,confidence,*_ = _compact_observed(packet,joints)
+    gap = 0.
+    if last_timestamp is not None:
+        gap = now-_time(last_timestamp,'last packet timestamp')
+        if gap <= 0:
+            raise ValueError('new packet must be newer than the stored source observation')
+    result = np.concatenate((np.column_stack((xy,confidence)).reshape(-1),
+                             [float(valid[0]),math.log1p(gap)])).astype(np.float32)
+    if not np.isfinite(result).all():
+        raise ValueError('Compact packet features exceed finite float32 range')
+    return result

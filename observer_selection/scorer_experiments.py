@@ -46,7 +46,8 @@ def load_transfer(checkpoint, selector, model, current, candidates, sequence, ou
     if path.is_dir():
         path=path/'checkpoint.pt'
     trained=json.loads((path.parent/'experiment.json').read_text(encoding='utf-8'))
-    for key,default in [('appearance','dino'),('joint_weights','scorenet'),('scorer','mlp')]:
+    for key,default in [('appearance','dino'),('joint_weights','scorenet'),('scorer','mlp'),('encoding','legacy'),
+                        ('encoding_version',None),('scoring_head',None)]:
         if trained.get(key,default)!=current.get(key,default):
             raise ValueError(f'Evaluation checkpoint differs in {key}')
     if trained['checkpoint_sha256']!=current['checkpoint_sha256']:
@@ -68,9 +69,26 @@ def load_transfer(checkpoint, selector, model, current, candidates, sequence, ou
     old=trained.get('sources',[])
     from .egohumans import _hash
     atomic_json(output/'evaluation_protocol.json',{
-        'checkpoint':str(path),'checkpoint_sha256':_hash(path),'epoch':state['epoch'],'training_sources':old,
+        'checkpoint':str(path),'checkpoint_sha256':_hash(path),'evaluation_replay_sha256':current['replay_sha256'],'epoch':state['epoch'],'training_sources':old,
         'evaluation_sources':list(candidates),'unseen_sources':sorted(set(candidates)-set(old)),
         'overlapping_sources':sorted(set(candidates)&set(old)),
         'same_sequence':trained['sequence']==str(sequence),'training_performed':False,
         'initialization':'All evaluation candidates acquired once; identical warm-up for each policy',
         'warning':'Camera transfer within the same sequence; no claim of held-out people or scenes'})
+
+
+def architecture_summary(selector):
+    compact = selector.encoding=='compact'
+    return {
+        'encoding':selector.encoding,'scorer':selector.scorer_kind,
+        'appearance':selector.appearance_kind,
+        'demand_features':selector.demand_size,'packet_features':selector.packet_size,
+        'demand_hidden':64,'source_hidden':64,'geometry_features':9,
+        'has_history_input':not compact,
+        'source_token_raw':74 if compact else 75,
+        'head':('shared [q64, token64] -> 64 -> 32 -> 1' if compact else
+                'legacy attention token64 -> 1' if selector.scorer_kind=='attention' else
+                'legacy separate local/source heads'),
+        'attention_heads':4 if selector.scorer_kind=='attention' else 0,
+        'selector_parameters':sum(p.numel() for p in selector.parameters()),
+        'note':'Parameter count is not end-to-end FLOPs or measured runtime; recurrent encoders are included.'}

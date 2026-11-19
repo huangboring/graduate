@@ -9,7 +9,8 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from .features import demand_features, geometry_features, packet_features
+from .features import (demand_features, geometry_features, packet_features,
+                       compact_demand_features, compact_packet_features)
 from .networks import SelectorNetwork
 from .preparation_cache import atomic_json, atomic_npz
 from .replay import ReplayProvider, load_sequence
@@ -45,12 +46,17 @@ def matched_random(candidates, learned, rng):
 
 
 class AppearanceSelector(SelectorNetwork):
-    def __init__(self, appearance='dino', scorer='mlp'):
+    def __init__(self, appearance='dino', scorer='mlp', encoding='legacy'):
         super().__init__(13)
+        if encoding not in ('legacy','compact'):
+            raise ValueError('Unknown feature encoding')
+        self.encoding = encoding
+        self.demand_size = 71 if encoding=='compact' else 148
+        self.packet_size = 41 if encoding=='compact' else 66
         self.scorer_kind = scorer
         if scorer not in ('mlp','attention'):
             raise ValueError('Unknown scorer')
-        if scorer == 'attention':
+        if scorer == 'attention' and encoding=='legacy':
             # No camera identity/position embedding: support a new camera roster.
             self.source_token = torch.nn.Linear(self.hidden+11,self.hidden)
             self.score_attention = torch.nn.MultiheadAttention(self.hidden,4,batch_first=True,dropout=0.)
@@ -60,15 +66,42 @@ class AppearanceSelector(SelectorNetwork):
         self.appearance_kind = appearance
         inputs = {'dino':768,'cnn':576,'none':0}[appearance]
         size = 32 if inputs else 0
-        if scorer == 'mlp':
+        if scorer == 'mlp' and encoding=='legacy':
             self.local_scorer = torch.nn.Sequential(torch.nn.Linear(2*self.hidden,self.hidden),
                                                    torch.nn.GELU(),torch.nn.Linear(self.hidden,1))
         self.appearance = (torch.nn.Sequential(torch.nn.Linear(inputs,32),torch.nn.LayerNorm(32))
                            if inputs else None)
-        self.demand_encoder = self._encoder(11*self.joints+5+size,self.hidden)
-        self.observation_encoder = self._encoder(5*self.joints+1+size,self.hidden)
+        self.demand_encoder = self._encoder(self.demand_size+size,self.hidden)
+        self.observation_encoder = self._encoder(self.packet_size+size,self.hidden)
+        if encoding=='compact':
+            # Common tokens and common scoring head for BOTH model variants.
+            # Build shared modules before attention so their seeded weights match.
+            del self.scorer, self.memory_attention, self.memory_positions
+            self.source_token = torch.nn.Linear(self.hidden+10,self.hidden)  # h64 + geometry9 + age1
+            self.token_norm = torch.nn.LayerNorm(self.hidden)
+            self.shared_scorer = torch.nn.Sequential(
+                torch.nn.Linear(2*self.hidden,self.hidden),torch.nn.GELU(),
+                torch.nn.Linear(self.hidden,32),torch.nn.GELU(),torch.nn.Linear(32,1))
+            if scorer=='attention':
+                self.score_attention = torch.nn.MultiheadAttention(self.hidden,4,batch_first=True,dropout=0.)
+                self.score_norm = torch.nn.LayerNorm(self.hidden)
 
     def score_candidates(self, demand, memories, geometries, ages):
+        if self.encoding=='compact':
+            if not (len(memories)==len(geometries)==len(ages)) or not memories:
+                raise ValueError('Need matching nonempty source memories, geometry and ages')
+            if any(not math.isfinite(float(t)) or t<0 for t in ages):
+                raise ValueError('Source ages must be finite nonnegative seconds')
+            raw = torch.stack([torch.cat((self._tensor(h,64,'memory'),self._tensor(g,9,'geometry'),
+                               demand.new_tensor([math.log1p(t)])))
+                               for h,g,t in zip(memories,geometries,ages)])
+            tokens = self.token_norm(torch.cat((demand[None],self.source_token(raw)),dim=0))
+            context = tokens
+            if self.scorer_kind=='attention':
+                attended,_ = self.score_attention(tokens[None],tokens[None],tokens[None],need_weights=False)
+                context = self.score_norm(tokens+attended[0])
+            scores = self.shared_scorer(torch.cat((demand.expand(len(tokens),-1),context),dim=-1)).squeeze(-1)
+            return scores[1:],scores[0]
         if self.scorer_kind == 'mlp':
             return torch.stack([self.score(demand,h,g,age,True)
                                 for h,g,age in zip(memories,geometries,ages)])
@@ -94,20 +127,22 @@ class AppearanceSelector(SelectorNetwork):
         return self.appearance(self._tensor(value,768,'DINOv2 appearance'))
 
     def demand(self, observation, previous=None):
-        features = demand_features(observation,previous,self.joints)
-        tensors = (self._tensor(features,11*self.joints+5,'demand'),
+        encode = compact_demand_features if self.encoding=='compact' else demand_features
+        features = encode(observation,previous,self.joints)
+        tensors = (self._tensor(features,self.demand_size,'demand'),
                    self._appearance(observation.backend_context,'local_dino_cls'))
         return self.demand_encoder(torch.cat(tensors))
 
     def local_score(self, demand, observation, previous):
-        if self.scorer_kind == 'attention':
-            return demand.new_zeros(())  # Replaced by the local attention-token score.
+        if self.scorer_kind == 'attention' or self.encoding=='compact':
+            return demand.new_zeros(())  # Replaced by the joint token-scoring result.
         current = self.demand(observation,previous)
         return self.local_scorer(torch.cat((demand,current))).squeeze(-1)
 
     def update(self, packet, old_h, last_timestamp=None):
-        features = packet_features(packet,last_timestamp,self.joints)
-        tensors = (self._tensor(features,5*self.joints+1,'packet'),
+        encode = compact_packet_features if self.encoding=='compact' else packet_features
+        features = encode(packet,last_timestamp,self.joints)
+        tensors = (self._tensor(features,self.packet_size,'packet'),
                    self._appearance(packet.payload,'dino_cls'))
         encoded = self.observation_encoder(torch.cat(tensors))
         return self.memory_cell(encoded,old_h)
@@ -276,7 +311,7 @@ def compare_original_fusion(data, model, selector, config, windows, output, join
     atomic_json(output/'fusion_comparison.json',result)
     print(json.dumps(result,indent=2),flush=True)
 
-def train(prepared, sequence, output, repo, checkpoint, device, epochs, cost, max_windows, resume, render, compare_original=False, appearance="dino", joint_weights="scorenet", sensitivity=False, ranking_from=None, label_stride=8, subset_training=False, scorer="mlp", sources=None, evaluate_from=None, save_every=25, target_cache_from=None):
+def train(prepared, sequence, output, repo, checkpoint, device, epochs, cost, max_windows, resume, render, compare_original=False, appearance="dino", joint_weights="scorenet", sensitivity=False, ranking_from=None, label_stride=8, subset_training=False, scorer="mlp", sources=None, evaluate_from=None, save_every=25, target_cache_from=None, encoding="legacy"):
     from .selection_video import export_outputs, image_paths, raw_joint_overlay
 
     torch.manual_seed(2026)
@@ -318,7 +353,7 @@ def train(prepared, sequence, output, repo, checkpoint, device, epochs, cost, ma
         from .cnn_features import add_cnn_features
         frames = add_cnn_features(prepared,sequence,raw,candidates,ids,frames,fixed,device)
     data = frames, ids, widths, fixed, raw, sparse, truth, rotations
-    selector = AppearanceSelector(appearance,scorer).to(device)
+    selector = AppearanceSelector(appearance,scorer,encoding).to(device)
     from .egohumans import _hash
     config = AcquisitionConfig(max_sources=len(candidates))
     contract={'prepared':str(prepared),'replay_sha256':_hash(prepared/'replay.npz'),
@@ -330,6 +365,9 @@ def train(prepared, sequence, output, repo, checkpoint, device, epochs, cost, ma
         contract.update(epochs_schema=3,appearance=appearance,joint_weights=joint_weights)
     if sources is not None:
         contract.update(sources=list(candidates),target_id=target,requester_id=raw)
+    if encoding=='compact':
+        contract.update(encoding='compact',encoding_version=1,scoring_head='shared_q_token_v1',
+                        demand_dim=71,packet_dim=41,has_history_feature=False)
     if scorer != 'mlp':
         contract['scorer'] = scorer
     if evaluate_from:
@@ -395,6 +433,8 @@ def train(prepared, sequence, output, repo, checkpoint, device, epochs, cost, ma
     output.mkdir(parents=True,exist_ok=True)
     atomic_json(output/'experiment.json',contract)
     atomic_json(output/'preparation_quality.json',quality)
+    from .scorer_experiments import architecture_summary
+    atomic_json(output/'model_architecture.json',architecture_summary(selector))
     if start>epochs:
         raise ValueError('Requested final epoch is lower than saved checkpoint epoch')
     if ranking_from:
@@ -466,6 +506,7 @@ def main():
     parser.add_argument('--max-windows',type=int)
     parser.add_argument('--appearance',choices=('none','cnn','dino'),default='dino')
     parser.add_argument('--joint-weights',choices=('vitpose','scorenet'),default='scorenet')
+    parser.add_argument('--encoding',choices=('legacy','compact'),default='legacy')
     parser.add_argument('--scorer',choices=('mlp','attention'),default='mlp')
     parser.add_argument('--sources',nargs='+',help='Explicit candidate roster; exclude held-out cameras from training')
     parser.add_argument('--evaluate-from',help='Checkpoint file or run directory; fixed-weight evaluation only')

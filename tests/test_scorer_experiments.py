@@ -56,7 +56,7 @@ class ScorerExperimentTest(unittest.TestCase):
         net=AppearanceSelector('none','attention')
         model=SimpleNamespace(device='cpu',adapter=torch.nn.Linear(52,512,bias=False))
         contract={'appearance':'none','joint_weights':'vitpose','scorer':'attention',
-                  'checkpoint_sha256':'official','target_id':'aria01','requester_id':'aria02',
+                  'checkpoint_sha256':'official','replay_sha256':'replay','target_id':'aria01','requester_id':'aria02',
                   'cost_m_per_source':.002,'objective':'exact_subset_expected_cost',
                   'sequence':'same','sources':['aria03','aria04','cam01','cam02']}
         with tempfile.TemporaryDirectory() as temp:
@@ -148,6 +148,36 @@ class ScorerExperimentTest(unittest.TestCase):
                 report(root)
                 self.assertGreater((root/'comparison.png').stat().st_size,1000)
                 self.assertIn('attention', (root/'comparison.csv').read_text(encoding='utf-8-sig'))
+                compact=root/'compact'
+                for kind in ('mlp','attention'):
+                    settings=dict(common,encoding='compact',scorer=kind,ranking_from=str(base),
+                                  subset_training=True,target_cache_from=str(mlp))
+                    destination=compact/kind
+                    train(output=str(destination),**settings)
+                    train(output=str(destination),**dict(settings,epochs=2,resume=True))
+                    train(output=str(destination/'epoch_0002/transfer34'),**dict(common,
+                          encoding='compact',scorer=kind,sources=['cam03','cam04'],
+                          evaluate_from=str(destination/'epoch_0002')))
+                    with self.assertRaisesRegex(ValueError,'encoding'):
+                        train(output=str(root/('wrong_'+kind)),**dict(common,scorer=kind,
+                              sources=['cam03','cam04'],evaluate_from=str(destination/'epoch_0002')))
+                    with self.assertRaisesRegex(ValueError,'Resume inputs'):
+                        train(output=str(destination),**dict(settings,encoding='legacy',resume=True))
+                    self.assertFalse((destination/'subset_cost_cache').exists())
+                report(compact,root)
+                self.assertTrue((compact/'model_comparison.csv').is_file())
+                self.assertTrue((compact/'old_vs_new.csv').is_file())
+                self.assertTrue((compact/'old_vs_new.png').is_file())
+                status=json.loads((compact/'baseline_comparison_status.json').read_text())
+                self.assertTrue(all(row['matched'] for row in status['status']))
+                # Changed cost must NOT be presented as a matched comparison.
+                compact_contract=compact/'mlp/experiment.json'
+                changed=json.loads(compact_contract.read_text());changed['cost_m_per_source']=.123
+                compact_contract.write_text(json.dumps(changed),encoding='utf-8')
+                from observer_selection.scorer_report import compare_baseline
+                compare_baseline(compact,root,[])
+                status=json.loads((compact/'baseline_comparison_status.json').read_text())
+                self.assertIn('cost_m_per_source',status['status'][0]['different_fields'])
 
 
 if __name__=='__main__':
