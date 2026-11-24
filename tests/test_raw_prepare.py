@@ -2,12 +2,30 @@ import unittest
 import tempfile
 import json
 import pickle
+import sys
+from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace, ModuleType
 from unittest.mock import patch
 import numpy as np
 from observer_selection.raw_prepare import (fisheye_project, upright_camera, Q_UPRIGHT, match_track,
     similarity_camera_extrinsic,validate_setup_restart,check_existing_setup)
+
+
+@contextmanager
+def isolated_modules(replacements):
+    """Restore only mocked modules; retain new imports and native Torch registrations."""
+    missing = object()
+    previous = {name: sys.modules.get(name, missing) for name in replacements}
+    sys.modules.update(replacements)
+    try:
+        yield
+    finally:
+        for name, value in previous.items():
+            if value is missing:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = value
 
 
 class RawGeometryTests(unittest.TestCase):
@@ -132,7 +150,7 @@ class RawGeometryTests(unittest.TestCase):
                 cache=Path(torch.hub.get_dir())/'checkpoints';cache.mkdir(parents=True,exist_ok=True)
                 (cache/'fasterrcnn_resnet50_fpn-fixture.pth').write_bytes(b'EXPLICIT_FAKE_DETECTOR')
                 return Detector()
-            with patch.dict('sys.modules',{'transformers':transformers,'human_body_prior.body_model.body_model':bodymodule}), \
+            with isolated_modules({'transformers':transformers,'human_body_prior.body_model.body_model':bodymodule}), \
                  patch('torchvision.models.detection.fasterrcnn_resnet50_fpn',side_effect=make_detector), \
                  patch('observer_selection.image_features.DinoV2Encoder',Dino):
                 with patch('builtins.input',side_effect=['0','q']):
@@ -216,6 +234,9 @@ class RawGeometryTests(unittest.TestCase):
             self.assertEqual(original,_hash(out/'aria02/selector_observations.npz'))
             self.assertEqual(check_preparation(finalized['output'])['frames'],2)
             self.assertEqual(len(load_sequence(finalized['output'])),2)
+            final_manifest=json.loads((base/'finalized/manifest.json').read_text())
+            self.assertEqual(Path(final_manifest['pairs']['aria02']),out/'aria02')
+            self.assertTrue((Path(final_manifest['pairs']['aria02'])/'meta.json').is_file())
             # A changed source must fail before any new export is written.
             (root/'ego/aria02/calib/00001.txt').write_text('changed')
             with self.assertRaisesRegex(ValueError,'Original raw input changed'):

@@ -44,14 +44,6 @@ class ReplayProvider:
         return self._frame.packets[observer_id]
 
 
-class ReplaySequences:
-    """Load one session at a time instead of retaining every candidate video in RAM."""
-    def __init__(self,paths,allow_benchmark_inputs=False):
-        self.paths=list(paths)
-        self.allow_benchmark_inputs=allow_benchmark_inputs
-    def __len__(self): return len(self.paths)
-    def __getitem__(self,index):
-        return load_sequence(self.paths[index],self.allow_benchmark_inputs)
 
 
 def load_sequence(path: str | Path, allow_benchmark_inputs: bool = False) -> list[ReplayFrame]:
@@ -128,7 +120,7 @@ def load_sequence(path: str | Path, allow_benchmark_inputs: bool = False) -> lis
         elif any(k in a for k in ('sparse_input','tracker_provenance','local_exo_rays','packet_exo_rays')):
             raise ValueError('Local-aux replay cannot contain legacy tracker/ray inputs')
         if is_local_aux:
-            from .local_fusion import OUTPUT_AXES
+            from .calibration import OUTPUT_AXES
             if str(a.get('output_axes',np.array('')).item()) != OUTPUT_AXES:
                 raise ValueError('Local-aux replay requires explicit requester-camera GT axes')
         for key in ('coordinate_convention','floor_provenance','floor_height_m','camera_provenance','output_axes'):
@@ -153,29 +145,3 @@ def load_sequence(path: str | Path, allow_benchmark_inputs: bool = False) -> lis
         metadata['input_provenance']=provenance
         frames.append(ReplayFrame(obs,ids,geometry,packets,a['gt_joints'][t],a['gt_valid'][t],frame_name,metadata))
     return frames
-
-
-def make_synthetic(path: str | Path, frames: int = 48, joints: int = 13, seed: int = 7):
-    """Only a reproducible wiring/gradient fixture, NOT a research benchmark."""
-    rng = np.random.default_rng(seed)
-    T,N,J = frames,3,joints
-    ts = np.arange(T,dtype=np.float64)/30
-    truth = rng.normal(0,.15,(1,J,3)) + .05*np.sin(ts[:,None,None]*3)
-    truth = truth - truth[:,:1]
-    local3d = truth + rng.normal(0,.08,(T,J,3))
-    local3d -= local3d[:,:1]
-    packets = truth[:,None] + rng.normal(size=(T,N,J,3))*np.array([.02,.05,.10])[None,:,None,None]
-    packets -= packets[:,:,:1]
-    localxy = truth[:,:,:2]*300 + [320,240] + rng.normal(0,5,(T,J,2))
-    packetxy = packets[...,:2]*300 + [320,240]
-    localvalid = rng.random((T,J))>.1
-    bbox = np.tile([100,30,540,450],(T,1)).astype(np.float32)
-    path = Path(path); path.parent.mkdir(parents=True,exist_ok=True)
-    np.savez_compressed(path,timestamps=ts,source_ids=np.array(['C','D','E']),target_id=np.array('B'),
-        local_xy=localxy.astype('f4'),local_valid=localvalid,local_bbox=bbox,
-        local_confidence=np.full((T,J),.8,dtype='f4'),packet_xy=packetxy.astype('f4'),
-        packet_valid=np.ones((T,N,J),bool),packet_bbox=np.tile(bbox[:,None],(1,N,1)),
-        packet_confidence=np.full((T,N,J),.8,dtype='f4'),gt_joints=truth.astype('f4'),
-        gt_valid=np.ones((T,J),bool),packet_joints3d=packets.astype('f4'),
-        packet_joint_weights=np.ones((T,N,J),dtype='f4'),local_joints3d=local3d.astype('f4'),
-        coordinate_frame=np.array('root_relative'),units=np.array('metres'),input_provenance=np.array('synthetic_demo'))

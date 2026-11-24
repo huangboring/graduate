@@ -7,7 +7,7 @@ from pathlib import Path
 import json
 import numpy as np
 from .egohumans import _json, _npz, _hash, _timestamps, _selector_observations, _rotations, _array
-from .local_fusion import CONVENTION, OUTPUT_AXES, rigid
+from .calibration import CONVENTION, OUTPUT_AXES, rigid
 
 
 def export_local_egohumans(manifest_path, output_path):

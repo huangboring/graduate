@@ -31,6 +31,11 @@ def finalize_raw(prepared, output):
         if not path.is_file() or _hash(path)!=item['sha256']:
             raise ValueError(f'Original raw input changed: {path}')
     result=export_local_egohumans(manifest,out/'replay.npz')
+    # A finalized export remains directly trainable while reusing verified views.
+    final_manifest=dict(m)
+    final_manifest['pairs']={source:str((root/Path(path)).resolve())
+                             for source,path in m['pairs'].items()}
+    atomic_json(out/'manifest.json',final_manifest)
     sidecar=Path(result['provenance']);receipt=json.loads(sidecar.read_text(encoding='utf-8'))
     receipt['input_files'].extend(contract['input_files'])
     receipt['input_files'].append({'path':str(contract_path),'sha256':_hash(contract_path)})
@@ -42,6 +47,6 @@ def finalize_raw(prepared, output):
     atomic_json(out/'preparation_summary.json',summary)
     # Separate finalization record: never rewrite the original immutable run.
     atomic_json(out/'finalization_run.json',{'source':str(root),'generator_sha256':_hash(Path(__file__))})
-    names=['replay.npz','replay.provenance.json','preparation_summary.json','finalization_run.json']
+    names=['replay.npz','replay.provenance.json','preparation_summary.json','finalization_run.json','manifest.json']
     atomic_json(out/'preparation_complete.json',{n:_hash(out/n) for n in names})
     return summary

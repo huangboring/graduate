@@ -6,8 +6,7 @@ import numpy as np
 import torch
 
 from observer_selection.features import compact_demand_features, compact_packet_features
-from observer_selection.fit_triangulated import AppearanceSelector
-from observer_selection.scorer_experiments import architecture_summary
+from observer_selection.selector import ViewSelector, LocalEncoding
 from observer_selection.types import Observation, Packet
 
 
@@ -54,41 +53,44 @@ class CompactSelectorTest(unittest.TestCase):
             compact_demand_features(now,now,13)
 
     def test_models_share_initial_common_weights_and_one_scoring_head(self):
-        torch.manual_seed(2026);mlp=AppearanceSelector('none','mlp','compact')
-        torch.manual_seed(2026);attention=AppearanceSelector('none','attention','compact')
+        torch.manual_seed(2026);mlp=ViewSelector('mlp')
+        torch.manual_seed(2026);attention=ViewSelector('attention')
         for name,value in mlp.state_dict().items():
             torch.testing.assert_close(value,attention.state_dict()[name])
         self.assertFalse(hasattr(mlp,'local_scorer'))
         self.assertFalse(hasattr(mlp,'scorer'))
-        self.assertFalse(architecture_summary(mlp)['has_history_input'])
-        self.assertEqual(mlp.source_token.in_features,74)
-        self.assertEqual(mlp.demand_encoder[0].in_features,71)
-        self.assertEqual(mlp.observation_encoder[0].in_features,41)
-        self.assertGreater(architecture_summary(attention)['selector_parameters'],
-                           architecture_summary(mlp)['selector_parameters'])
+        self.assertEqual(mlp.architecture_summary()['local_content'],'LayerNorm(current E)')
+        self.assertEqual(mlp.source_projection.in_features,74)
+        self.assertEqual(mlp.local_encoder[0].in_features,71)
+        self.assertEqual(mlp.source_encoder[0].in_features,41)
+        self.assertGreater(attention.architecture_summary()['selector_parameters'],
+                           mlp.architecture_summary()['selector_parameters'])
 
     def test_both_variants_support_permuted_rosters_and_gradients(self):
         for kind in ('mlp','attention'):
-            net=AppearanceSelector('none',kind,'compact')
+            net=ViewSelector(kind)
             q=torch.randn(64,requires_grad=True)
+            e=torch.randn(64,requires_grad=True)
+            local_encoding=LocalEncoding(e,q)
             memories=[torch.randn(64,requires_grad=True) for _ in range(4)]
             geometry=[np.arange(9,dtype='f4')/9+i*.1 for i in range(4)]
             ages=[0.,.2,.4,1.3]
-            score,local=net.score_candidates(q,memories,geometry,ages)
+            score,local=net.score_candidates(local_encoding,memories,geometry,ages)
             order=[2,0,3,1]
-            permuted,permuted_local=net.score_candidates(q,[memories[i] for i in order],
+            permuted,permuted_local=net.score_candidates(local_encoding,[memories[i] for i in order],
                                          [geometry[i] for i in order],[ages[i] for i in order])
             torch.testing.assert_close(permuted,score[order],atol=1e-6,rtol=1e-5)
             torch.testing.assert_close(local,permuted_local,atol=1e-6,rtol=1e-5)
             (score-local).square().sum().backward()
             self.assertTrue(torch.isfinite(q.grad).all())
+            self.assertGreater(float(e.grad.abs().sum()),0)
             self.assertTrue(all(h.grad is not None and torch.isfinite(h.grad).all() for h in memories))
-            self.assertGreater(float(net.shared_scorer[0].weight.grad.abs().sum()),0)
+            self.assertGreater(float(net.shared_head[0].weight.grad.abs().sum()),0)
             if kind=='attention':
-                self.assertGreater(float(net.score_attention.in_proj_weight.grad.abs().sum()),0)
-            self.assertEqual(net.score_candidates(q,memories[:1],geometry[:1],ages[:1])[0].shape,(1,))
+                self.assertGreater(float(net.attention.in_proj_weight.grad.abs().sum()),0)
+            self.assertEqual(net.score_candidates(local_encoding,memories[:1],geometry[:1],ages[:1])[0].shape,(1,))
             with self.assertRaisesRegex(ValueError,'ages'):
-                net.score_candidates(q,memories,geometry,[0.,.2,.4,-1.])
+                net.score_candidates(local_encoding,memories,geometry,[0.,.2,.4,-1.])
 
 
 if __name__=='__main__':

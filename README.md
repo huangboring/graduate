@@ -1,71 +1,61 @@
-# 一次決定、多來源取用與過期重訪
+# 依本機需求選擇外部視角
 
-**另一台主機部署：**先看 [Git clone、環境、資料位置與版本限制](docs/remote_setup.md)。上游版本固定在 `configs/upstream.lock.json`；資料與權重另行下載。目前 local-aux 尚未實作官方預訓練權重移植。
+目前唯一訓練主線為 **current_e_shared_head_v2**。本機 O₀ 處理目標 T 的影像，依本機 E／Q 與逐來源記憶選擇外部視角 O′。這是離線 EgoHumans 回放實驗；網路傳輸應用程式是情境假設，尚未實作通訊系統。
 
-**已下載 EgoHumans、要先開訓：**使用 [單序列前處理、兩階段訓練與出圖](docs/single_sequence_quickstart.md)。新前處理使用 DINOv2 外觀與位置追蹤，失配後持續嘗試重新取得；支援逐幀快取與 `--resume`。單序列結果明確標為訓練資料上的擬合，不代表獨立測試效果。
+## 開始訓練
 
-本專案依本機 A 的當幀觀測與真正取得過的歷史，決定向哪些觀測者取得目標 B 的資料。**完整名單先決定，再一次呼叫取用介面；收到第一份資料後不重新選第二人。**v4 新增本機＋輔助視角重建器：以 A 看見 B 的觀測為主分支，不需要 B 自身 tracker；沿用 EgoExoMoCap 空間／時間融合模組與 SMPL-H 輸出。先訓練改版重建器，再凍結它訓練選擇器。
-
-目前是 v4 local-aux 版本，選擇器沿用 v3 批次子集與重訪。**尚無真實 EgoHumans 訓練結果**；新後端仍需授權 SMPL-H、human_body_prior、因果前處理資料與新訓練權重，不使用原版 checkpoint 充當改版權重。[v4 架構、差異、資料與兩階段訓練](docs/local_aux_v4.md)。
-
-## 流程
-
-```mermaid
-flowchart TD
-    Local[本機當幀與歷史] --> Demand[需求 MLP＋短序列 GRU]
-    Memory[各來源已收到的資料] --> Encode[來源 GRU 或 attention]
-    Demand --> Scores[共享評分器：每來源分數]
-    Encode --> Scores
-    Age[首次出現與上次取用時間] --> Refresh[重訪排程：最早到期者]
-    Scores --> Choose[整批選擇：重訪名額＋其餘 Top-k]
-    Refresh --> Choose
-    Choose --> Lock[固定完整 selected_ids]
-    Lock --> Acquire[一次 acquire_many]
-    Acquire --> Recon[凍結已訓練的 local-aux 多視角重建]
-    Local --> Recon
-    Acquire --> Update[整批驗證後更新所有已取用來源]
-    Update --> Memory
-```
-
-預設最多2位遠端來源、重訪門檻1秒、到期時保留1個名額；這是**可設定的工程預設，不是實驗得到的最佳值**。本機A不占遠端名額。候選少於預算時全取。新來源第一次出現即進入重訪排程，已收到資料者以「上次取用＋門檻」作為到期時間。一般模型選取也刷新時間；沒有到期來源時不保留重訪名額。
-
-同時到期的人依到期時間排序，最早者先服務，避免低分來源一直被忽略。若候選有限、持續可選、每幀成功同步回傳且重訪啟用，可以限制到期後的等待決策數。門檻不是無條件的延遲上限；丟包、離線或跳過決策不在目前保證範圍。
-
-## 模型與損失
-
-需求編碼器、每來源GRU/attention與共享評分器保留。selection.py負責可替換的集合選擇與獨立重訪規則。現在使用獨立來源分數的Top-k，不宣稱已建模視角互補；未來集合模型可讀PreAcquisitionState中的需求與各來源歷史，但不能讀當幀外部封包。
-
-```text
-合法集合 S：大小為 min(k,候選數)，且包含本幀指定重訪來源
-z(S) = Σ_{i∈S} z_i
-P(S) = softmax over legal subset scores
-e(S) = MPJPE(固定重建器(本機、已取得歷史、S的整組當幀封包), GT)
-L = Σ_S P(S) × stop_gradient(e(S))
-```
-
-成本是實際多視角聯合重建誤差，不是單人誤差相加。訓練先抽取完整集合，再離線計算成本；只有該集合能更新歷史。重建器凍結，沒有教師神經網路。強制重訪名額不學習選擇，剩餘名額仍可受損失訓練。若沒有任何可選集合差異，訓練會明確拒絕，不假裝全取學出了選人。
-
-## 使用
+在遠端 PowerShell 執行：
 
 ```powershell
-python -m unittest discover -s tests -v
-python -m observer_selection demo --output runs/my_batch_gru --memory gru --epochs 3 --max-sources 2 --refresh-after-s 1 --refresh-slots 1
-python -m observer_selection demo --output runs/my_batch_attention --memory attention --epochs 3 --max-sources 2 --refresh-after-s 1 --refresh-slots 1
-python -m observer_selection audit --repo external/EgoExoMoCap
+Set-Location D:\Ray\graduate
+git pull --ff-only
+if ($LASTEXITCODE -ne 0) { throw 'Git 更新失敗' }
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\train_current_remote.ps1 -Epochs 100
 ```
 
-demo為合成流程。每次用新目錄。--no-refresh是明確消融，關閉後不保證來源重訪。evaluate從checkpoint還原相同取用/重訪設定，不偷偷改政策。單選可用--max-sources 1；實驗固定k時應有候選數大於k的資料。
+腳本依序訓練幾何 Exo 適配層 16 epochs、MLP 評分器 100 epochs、Attention 對照 100 epochs；共用同一凍結適配層及子集標籤。以 cam01/02 訓練，cam03/04 做固定權重相機替換；aria03/04 共同保留。若先只訓練，加入 `-SkipTransfer`。需要動畫時加入 `-Video`。可用 `-Python` 指定 Python、`-Root` 指定新的輸出位置，`-Epochs 50` 改跑 50 epochs。
 
-本次測試輸出：runs/batch_refresh_gru_v3、runs/batch_refresh_attention_v3；為了短fixture能多次觸發，測試使用0.25秒門檻，並非研究推薦參數。viewer可查看每幀名單、強制重訪、實際請求次數與重建點。
+預設輸出 `runs/tagging001_current_e_v2`，不覆寫舊結果。中斷後重跑相同命令會續訓；架構、資料及重要設定不相符時會停止。舊選擇器不能直接續訓。`-From 舊適配層路徑` 僅明確重用通過資料、相機集合及 ViTPose 權重檢查的適配層，不會載入舊評分器。
 
-[完整設計與保證](docs/design.md) · [資料契約與實際指令](docs/data_contract.md) · [EgoHumans準備](docs/egohumans_preparation.md)
+前提：既有準備資料 `data/prepared/tagging001_triangulated_annotated`、EgoHumans 原始資料、`external/EgoExoMoCap` 的指定權重、授權 SMPL-H 和 GPU 環境已就緒。上游版本記錄於 `configs/upstream.lock.json`。若缺 cam03/04，使用 `-SkipTransfer` 或先準備相應來源。
 
-## 邊界與版本
+## 看結果
 
-- checkpoint版本3、objective=expected_subset_mpjpe；v1誤差回歸與v2單來源checkpoint拒絕載入。歷史runs保留，不能與v3混作研究結果。
-- 推論Top-k不列舉所有子集；離線訓練/評估使用精確集合期望，超過--max-exact-subsets（預設4096）會報錯，不靜默抽樣或截斷。
-- 所有受限baseline採相同預算/重訪規則，另列all全取對照並明示其不同成本。資料很小時，必須用實驗證明選擇的效益，不能憑空假設巨大通訊成本。
-- 同步取得整批封包，錯誤/部分回傳不更新任何來源；沒有實作延遲、丟包與頭盔網路服務。acquire_many是一個批次介面，不宣稱封包會在物理上同時抵達。
-- `--backend local-aux` 為新預設，移除 B tracker 依賴，要求相機校正與已訓練的 local_aux_v1 checkpoint；SMPL-H 中性 shape 保留。
-- `--backend egoexo` 保留原版作對照，仍要求 B tracker 與官方權重，不與新後端混用資料格式。
-- 因果歷史視窗、每幀改變來源集合與遮罩的真實重建效果仍待新後端訓練驗證。
+- `comparison.png`、`comparison.csv`：MLP／Attention 學習曲線及相機替換比較。
+- `mlp/metrics.json`、`attention/metrics.json`：Learned、Local only、All sources、Random matched count，使用同一適配層。
+- `mlp/round_trace.json`：逐幀評分、選擇、重訪、評分前資料年齡與實際更新來源。
+- `mlp/predictions.npz`：預測、GT、原始幀號、關節幾何狀態。
+- `mlp/epoch_0050`、`epoch_0100`：固定 epoch 權重與評估；`transfer34/camera_transfer.json` 為固定權重相機替換。
+- 加 `-Video` 會輸出 `mlp/multiview_selection.mp4` 和 `attention/multiview_selection.mp4`：多視角選中變亮、未選變暗，並列預測與 GT。
+
+## 目前架構
+
+1. 初始化取得全部來源一次，不計入逐幀平均請求數。
+2. 本機特徵 71 維 → MLP → E64；最近最多 4 筆本機觀測經 GRU → Q64。本機 GRU 每輪重新計算此視窗，來源 GRU 則保存各來源狀態。
+3. 從狀態字典讀 H64、最後已取得相機資訊及拍攝時間。G9 與 `log1p(age)` 和 H 串接，Linear74→64＋LayerNorm 得 Z。
+4. 同一評分頭處理 `[Q,LN(E)]` 與 `[Q,Z]`，得到本機及來源分數。Attention 是明確選擇的對照版本，在相同 `[E,Z…]` 內容上加 self-attention，仍共用 Q 和評分頭。
+5. 取得所有分數高於本機的來源，再加必要重訪。無 Top-k 上限；超過 1 秒的來源依最早到期順序每輪強制取 1 個，不重複入列。
+6. 選擇鎖定後才讀當前來源封包。姿態特徵 41 維 → MLP → 來源 GRU，僅更新選中的 H、拍攝時間和相機資訊。本輪更新供下一輪評分；未取得新觀測者保持原值。
+7. 當前本機與實際取得的來源做信心加權幾何三角化；不足兩條有效射線時使用單視角近似回退。Exo embedding 產生單一 512 維 Exo token，接既有 Ego token 及凍結的空間／時間 Transformer。
+
+目前選擇器沒有 CNN／DINO 外觀輸入，也不使用額外 DINO ScoreNet 產生三角化權重。ViTPose 的關節信心直接作為幾何權重。DINO 仍可能用於資料準備的身份追蹤，以及明確標示的原版融合比較；不進入目前選擇器。
+
+## 訓練與比較的解讀
+
+第一階段只學 52→512 幾何殘差適配層，原版40→512投影及重建模型凍結。第二階段凍結適配層，以離線子集誤差＋每次請求成本＋熵項訓練評分器；不是新增一個加權信心網路。子集標籤每隔8幀計算，在固定隨機雙來源背景中只替換被測幀，並非整個96幀視窗所有組合的最優解。
+
+結果是同序列內評估；換相機不等於換人物或場景。目標的頭／腕追蹤由資料集 SMPL FK 取得，地板高度來自參考姿態，因此不能直接和論文50 mm測試成績比較。請求數減少也不能直接宣稱端到端 FLOPs 或時間下降，需另行量測。
+
+需要原版融合對照時，在已訓練的主線命令加入 `--resume --compare-original`，保留同一 `--adapter-from`、來源集合及其他設定。該對照沿用 DINOv2 描述子，輸出明確標示替換，不能視為官方完整重現。
+
+## 檔案與驗證
+
+`selector.py` 是網路；`state_bank.py` 是來源字典；`selection.py` 是選擇／重訪規則；`rollout.py` 是回合時序；`fit_triangulated.py` 是訓練入口；`subset_training.py` 是離線子集標籤與損失；`triangulation.py` 和 `single_exo.py` 是幾何及重建串接。資料準備與原始影像追蹤工具保留，早期 local-aux、獨立評分頭、CNN 選擇器及 Top-k 訓練分支已移除，歷史可由 Git 取得。舊準備檔中的 `local_aux_*` 字串是相容格式標籤，不會啟用已刪除的舊後端。
+
+```powershell
+python -m unittest discover -s tests -q
+python -m observer_selection --help
+python -m observer_selection.fit_triangulated --help
+```
+
+本機驗證涵蓋因果時序、按ID更新、整批失敗不部分寫入、E/Q共用評分、MLP／Attention排列等變、訓練／續訓／相機替換、原版融合介面與動畫。CPU 測試通過不等於已完成遠端 GPU 訓練，也不保證特定 MPJPE。觀測與封包契約見 [目前流程](docs/current_method.md)，原始資料準備見 [資料準備](docs/egohumans_preparation.md)。

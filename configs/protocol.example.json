@@ -1,5 +1,0 @@
-{
-  "train": ["../data/replay/REPLACE_WITH_TRAIN_SCENE_SESSION.npz"],
-  "validation": ["../data/replay/REPLACE_WITH_DISTINCT_VALIDATION_SCENE_SESSION.npz"],
-  "test": ["../data/replay/REPLACE_WITH_DISTINCT_TEST_SCENE_SESSION.npz"]
-}

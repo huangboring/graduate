@@ -6,7 +6,7 @@ import numpy as np
 import torch
 import yaml
 
-from .official_demo import module_from_file, strict_weights
+from .upstream import module_from_file, strict_weights
 from .triangulation import _camera
 from .types import Observation
 
@@ -62,16 +62,6 @@ class SingleExo:
                                    rotations[:, left], joints[:, right], rotations[:, right])
         # The first raw frame initializes, and the official input starts at raw frame 2.
         return sparse, joints, rotations[:, head]
-
-    @torch.no_grad()
-    def confidence(self, view):
-        context = view.backend_context if hasattr(view, 'backend_context') else view.payload
-        key = 'local_dino_cls' if hasattr(view, 'backend_context') else 'dino_cls'
-        if key not in context:
-            return view.confidence
-        dino = torch.as_tensor(context[key], device=self.device).reshape(1, 1, 768)
-        score = self.net.fusion.scorenet(dino).reshape(13).cpu().numpy()
-        return np.where(np.asarray(view.confidence) >= .15, score, 0.)
 
     def reconstruct(self, sparse, head, points, state, valid, floor):
         f = self.net.fusion

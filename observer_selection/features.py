@@ -61,81 +61,8 @@ def _observed_features(observation: Observation | Packet, joints: int | None):
     return normalized, valid, confidence, confidence_valid, center, scale
 
 
-def demand_features(observation: Observation, previous: Observation | None = None,
-                    joints: int | None = None) -> np.ndarray:
-    """Return 11J+5 features without inventing unavailable history.
-
-    Per joint: normalized xy (2), coordinate availability (1), confidence (1),
-    confidence availability (1), local-view projected-prior residual (2), its
-    availability (1), normalized local 2D displacement/second (2), its availability
-    (1). The 2D rate is NOT a world-space motion velocity.
-
-    Globals: bbox center/scale (2), log1p(bbox scale in pixels) (1), log1p(previous
-    local observation age) (1), log1p(projected prior source age) (1).
-    """
-    now = _time(observation.timestamp, "timestamp")
-    xy, valid, confidence, confidence_valid, center, scale = _observed_features(observation, joints)
-    n = len(xy)
-    residual = np.zeros((n, 2), dtype=np.float64)
-    residual_valid = np.zeros(n, dtype=bool)
-    rate = np.zeros((n, 2), dtype=np.float64)
-    rate_valid = np.zeros(n, dtype=bool)
-    previous_age = prior_age = 0.0
-
-    if previous is not None:
-        if previous.target_id != observation.target_id:
-            raise ValueError("previous observation belongs to a different target")
-        previous_age = now - _time(previous.timestamp, "previous timestamp")
-        if previous_age <= 0:
-            raise ValueError("previous observation must strictly precede current time")
-        old_xy, old_valid, *_ = _observed_features(previous, n)
-        rate_valid = valid & old_valid
-        rate = np.where(rate_valid[:, None], (xy - old_xy) / previous_age, 0.0)
-
-    if observation.prior_xy is not None:
-        if observation.prior_timestamp is None:
-            raise ValueError("projected prior requires its causal source timestamp")
-        prior_age = now - _time(observation.prior_timestamp, "prior timestamp")
-        if prior_age <= 0:
-            raise ValueError("prior source timestamp must strictly precede current time")
-        prior = np.asarray(observation.prior_xy, dtype=np.float64)
-        if prior.shape != (n, 2):
-            raise ValueError("prior_xy must have shape [J,2]")
-        prior_valid = (np.isfinite(prior).all(axis=-1) if observation.prior_valid is None
-                       else _mask(observation.prior_valid, (n,), "prior_valid"))
-        if not np.isfinite(prior[prior_valid]).all():
-            raise ValueError("available prior coordinates must be finite")
-        residual_valid = valid & prior_valid
-        prior_normalized = (prior - center) / scale
-        residual = np.where(residual_valid[:, None], xy - prior_normalized, 0.0)
-    elif observation.prior_valid is not None or observation.prior_timestamp is not None:
-        raise ValueError("prior metadata without prior_xy is ambiguous")
-
-    per_joint = np.column_stack((xy, valid, confidence, confidence_valid,
-                                 residual, residual_valid, rate, rate_valid))
-    globals_ = [*(center / scale), math.log1p(scale), math.log1p(previous_age),
-                math.log1p(prior_age)]
-    result = np.concatenate((per_joint.reshape(-1), globals_)).astype(np.float32)
-    if not np.isfinite(result).all():
-        raise ValueError("feature magnitudes exceed finite float32 range")
-    return result
 
 
-def packet_features(packet: Packet, last_timestamp: float | None = None,
-                    joints: int | None = None) -> np.ndarray:
-    """5J+1 acquired-observation features, no ID embedding or old demand vector."""
-    now = _time(packet.timestamp, "packet timestamp")
-    xy, valid, confidence, confidence_valid, *_ = _observed_features(packet, joints)
-    gap = 0.0
-    if last_timestamp is not None:
-        gap = now - _time(last_timestamp, "last packet timestamp")
-        if gap <= 0:
-            raise ValueError("new packet must be newer than the stored source observation")
-    values = np.column_stack((xy, valid, confidence, confidence_valid)).reshape(-1)
-    result = np.concatenate((values, [math.log1p(gap)])).astype(np.float32)
-    if not np.isfinite(result).all():
-        raise ValueError("packet feature magnitudes exceed finite float32 range")
-    return result
 
 
 def geometry_features(geometry: Geometry | None, now: float) -> np.ndarray:

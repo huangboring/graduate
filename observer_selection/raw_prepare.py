@@ -8,7 +8,7 @@ GT is loaded separately AFTER image inference, exclusively for supervision.
 from pathlib import Path
 import json
 import numpy as np
-from .local_fusion import rigid
+from .calibration import rigid
 
 
 Q_UPRIGHT = np.array([[0.,-1,0],[1,0,0],[0,0,1]])

@@ -28,13 +28,17 @@ def expected_cost_loss(margins, errors, masks, required, cost, temperature=.0005
 
 
 @torch.no_grad()
-def build_targets(data, model, directory, stride, adapter_hash):
+def build_targets(data, model, directory, stride, adapter_hash, replay_hash):
     frames, ids, _, _, _, sparse, truth, rotations = data
     masks = masks_for(len(frames[0].candidates))
     window = model.window
+    if stride < 1 or window % stride:
+        raise ValueError('Label stride must divide the reconstruction window')
     count = len(sparse)//window*window
-    contract = json.dumps({'adapter_sha256':adapter_hash,'stride':stride,
-                           'frames':count,'version':1,'background':'seeded_random_two'},sort_keys=True)
+    contract = json.dumps({'adapter_sha256':adapter_hash, 'replay_sha256':replay_hash,
+                           'sources':list(frames[0].candidates),
+                           'target_id':frames[0].observation.target_id,'stride':stride,
+                           'frames':count,'version':2,'background':'seeded_random_two'},sort_keys=True)
     cache = directory/'subset_cost_cache'
     cache.mkdir(exist_ok=True)
     errors = np.full((count,len(masks)),np.nan,dtype='f4')
@@ -99,18 +103,17 @@ def build_targets(data, model, directory, stride, adapter_hash):
 
 
 def fit_epoch(data, model, selector, config, targets, optimiser, epoch, cost):
-    from .fit_triangulated import Rollout
+    from .rollout import Rollout
 
     frames, _, widths, fixed, raw, _, truth, rotations = data
-    selector.score_cost=0.
-    rollout=Rollout(selector,model,frames,raw,truth[:,15],rotations,widths,fixed,
-                    config,random.Random(2026+epoch),'vitpose')
+    rollout=Rollout(selector,frames,raw,truth[:,15],rotations,widths,fixed,
+                    config,2026+epoch)
     masks=torch.as_tensor(masks_for(len(frames[0].candidates)),device=model.device)
     losses=[]
     for start in range(0,len(targets),model.window):
         terms=[]
         for index in range(start+1,start+model.window+1):
-            _,_,_,_,required=rollout.step(frames[index],index,'sample')
+            required=rollout.step(frames[index],index,'sample').required
             measured=targets[index-1]
             if np.isfinite(measured).all():
                 errors=torch.as_tensor(measured,device=model.device)

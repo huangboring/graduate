@@ -6,16 +6,13 @@ from types import SimpleNamespace
 
 import numpy as np
 import torch
-from torchvision.models import mobilenet_v3_small
 
-from observer_selection.fit_triangulated import AppearanceSelector, _run, choose, matched_random
-from observer_selection.official_demo import module_from_file
+from observer_selection.upstream import module_from_file
 from observer_selection.selection_video import export_outputs
 from observer_selection.single_exo import SingleExo
 from observer_selection.triangulation import triangulate_views
 from observer_selection.types import Observation, Packet
 from observer_selection.replay import ReplayFrame
-from observer_selection.selection import AcquisitionConfig
 
 
 def view(center, point, mask=None):
@@ -43,20 +40,6 @@ class TriangulatedPipelineTest(unittest.TestCase):
         np.testing.assert_allclose(points[0],point-head,atol=1e-6)
         self.assertFalse(np.allclose(points[1],points[0]))
 
-    def test_local_threshold_and_mandatory_refresh(self):
-        cameras=('C','D','E','F','G')
-        scores=torch.tensor([.9,.8,.7,.6,.4],requires_grad=True)
-        local=torch.tensor(.6,requires_grad=True)
-        self.assertEqual(choose(scores,local,cameras,('G',),'learned',None)[0],('C','D','E','G'))
-        self.assertEqual(choose(scores,torch.tensor(1.),cameras,(),'learned',None)[0],())
-        _, logp=choose(scores,local,cameras,('G',),'sample',random.Random(1))
-        logp.backward()
-        self.assertTrue(torch.isfinite(scores.grad).all())
-        self.assertEqual(float(scores.grad[-1]),0.)
-        self.assertNotEqual(float(local.grad),0.)
-        selected=matched_random(cameras,{'selected':['C','D','G'],'refresh':['G']},random.Random(5))
-        self.assertIn('G',selected)
-        self.assertEqual(len(selected),3)
 
     def test_official_fusion_interface_gradient(self):
         repo=Path(__file__).resolve().parents[1]/'external/EgoExoMoCap'
@@ -112,75 +95,6 @@ class TriangulatedPipelineTest(unittest.TestCase):
                             np.tile(np.eye(3),(2,1,1)),[[first,missing],[other,other]],1.)
         self.assertEqual(result.shape,(2,22,3))
 
-    def test_two_training_windows_with_memory_and_one_token(self):
-        from dataclasses import replace
-        points=np.array([0.,0.,4.])
-        frames=[]
-        for i in range(7):
-            obs=replace(view(np.zeros(3),points),timestamp=i*.05)
-            other=view(np.array([1.,0.,0.]),points)
-            packet=Packet('C','T',obs.timestamp,other.xy,other.valid,other.bbox,
-                          other.confidence,{'camera_to_world':other.backend_context['local_camera_to_world'],
-                                            'intrinsics':other.backend_context['local_intrinsics']})
-            frames.append(ReplayFrame(obs,('C',),{}, {'C':packet},np.zeros((22,3)),
-                                      np.ones(22,bool),'world'))
-        class Model:
-            window, device = 3, 'cpu'
-            adapter = torch.nn.Linear(39,66)
-            @staticmethod
-            def confidence(obs):
-                raise AssertionError('ViTPose mode must not call ScoreNet')
-            def reconstruct(self,sparse,head,values,state,valid,floor):
-                return self.adapter(torch.from_numpy(values.reshape(3,39))).reshape(3,22,3)
-        model=Model()
-        selector=AppearanceSelector()
-        before=selector.scorer[-1].weight.detach().clone()
-        data=(frames,list(range(1,8)),{'A':640,'C':640},set(),'A',np.zeros((6,54),'f4'),
-              np.tile(points.astype('f4'),(7,22,1)),np.tile(np.eye(3),(7,1,1)))
-        optimiser=torch.optim.Adam([*selector.parameters(),*model.adapter.parameters()])
-        result,predictions,_=_run(data,model,selector,AcquisitionConfig(max_sources=1),
-                                   'sample',11,2,optimiser,joint_weights='vitpose')
-        self.assertEqual([row['frame'] for row in result],list(range(2,8)))
-        self.assertEqual(predictions.shape,(6,22,3))
-        self.assertFalse(torch.equal(before,selector.scorer[-1].weight))
-        from observer_selection.ranking_training import build_targets, fit_epoch
-        for parameter in model.adapter.parameters():
-            parameter.requires_grad_(False)
-        with tempfile.TemporaryDirectory() as temp:
-            directory=Path(temp)
-            labels=build_targets(data,model,directory,1,'frozen-fixture')
-            self.assertEqual(labels.shape,(6,1))
-            self.assertTrue(np.isfinite(labels).all())
-            np.testing.assert_array_equal(labels,build_targets(data,model,directory,1,'frozen-fixture'))
-            frozen=model.adapter.weight.detach().clone()
-            baseline=selector.local_scorer[-1].weight.detach().clone()
-            optimiser=torch.optim.Adam(selector.parameters(),lr=1e-3)
-            report=fit_epoch(data,model,selector,AcquisitionConfig(max_sources=1),
-                             labels,optimiser,1,.001)
-            self.assertEqual(report['optimizer_updates'],2)
-            self.assertTrue(np.isfinite(report['score_loss']))
-            self.assertFalse(torch.equal(baseline,selector.local_scorer[-1].weight))
-            self.assertTrue(torch.equal(frozen,model.adapter.weight))
-            from observer_selection.subset_training import build_targets as subset_targets, fit_epoch as subset_epoch
-            costs=subset_targets(data,model,directory,1,'frozen-fixture')
-            self.assertEqual(costs.shape,(6,2))
-            np.testing.assert_array_equal(costs,subset_targets(data,model,directory,1,'frozen-fixture'))
-            subset_report=subset_epoch(data,model,selector,AcquisitionConfig(max_sources=1),
-                                       costs,optimiser,2,.002)
-            self.assertTrue(np.isfinite(subset_report['subset_loss']))
-            self.assertTrue(torch.equal(frozen,model.adapter.weight))
-            attention=AppearanceSelector('none','attention')
-            attention_before=attention.score_attention.in_proj_weight.detach().clone()
-            attention_optimiser=torch.optim.Adam(attention.parameters(),lr=1e-3)
-            attention_report=subset_epoch(data,model,attention,AcquisitionConfig(max_sources=1),
-                                         costs,attention_optimiser,2,.002)
-            self.assertEqual(attention_report['optimizer_updates'],2)
-            self.assertTrue(np.isfinite(attention_report['subset_loss']))
-            self.assertFalse(torch.equal(attention_before,attention.score_attention.in_proj_weight))
-            self.assertTrue(torch.equal(frozen,model.adapter.weight))
-            evaluated,_,_=_run(data,model,attention,AcquisitionConfig(max_sources=1),
-                              'learned',2026,2,joint_weights='vitpose')
-            self.assertEqual(len(evaluated),6)
 
 
 
@@ -202,26 +116,6 @@ class TriangulatedPipelineTest(unittest.TestCase):
         self.assertAlmostEqual(float(mandatory.grad[1]),0.,places=6)
         self.assertTrue(torch.isfinite(mandatory.grad).all())
 
-    def test_frozen_mobilenet_features_and_optional_selector_input(self):
-        from dataclasses import replace
-        from unittest.mock import patch
-        from observer_selection.cnn_features import MobileNetAppearance, _square_crop
-
-        small = mobilenet_v3_small(weights=None)
-        with patch('torchvision.models.mobilenet_v3_small', return_value=small):
-            encoder=MobileNetAppearance('cpu')
-        crop=_square_crop(np.zeros((150,100,3),dtype='u1'),np.array([-10,10,70,120]))
-        values=encoder([crop])
-        self.assertEqual(values.shape,(1,576))
-        self.assertTrue(np.isfinite(values).all())
-        self.assertFalse(any(p.requires_grad for p in encoder.features.parameters()))
-        obs=view(np.zeros(3),np.array([0.,0.,4.]))
-        obs=replace(obs,backend_context={**obs.backend_context,'cnn_cls':values[0]})
-        for variant in ('none','cnn'):
-            selector=AppearanceSelector(variant)
-            q=selector.demand_sequence([obs])
-            self.assertEqual(q.shape,(selector.hidden,))
-            self.assertTrue(torch.isfinite(selector.local_score(q,obs,None)))
 
     def test_multiview_animation_and_figures(self):
         import cv2
